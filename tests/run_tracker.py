@@ -45,9 +45,9 @@ C_Container = {
 }
 function GetInboxNumItems() return #_mail, #_mail end
 function GetInboxHeaderInfo(i) local m = _mail[i]; return "p", "s", m.sender, m.subject, m.money, 0, m.daysLeft end
-function GetInboxText(i) return "", "", false, _mail[i].invoice ~= nil end
+function GetInboxText(i) if _mail[i].hide then return nil end return "", "", false, _mail[i].invoice ~= nil end
 function GetInboxInvoiceInfo(i)
-  local v = _mail[i].invoice; if not v then return nil end
+  local v = _mail[i].invoice; if not v or _mail[i].hide then return nil end
   return v.type, v.name, v.player, v.bid, v.buyout, v.deposit, v.cut, 0, 0, 0, v.count
 end
 function GetInboxItemLink(i, n) return _mail[i].link end

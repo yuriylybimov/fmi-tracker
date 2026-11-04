@@ -64,5 +64,23 @@ class Addon(unittest.TestCase):
                           get('chars["Orakh Gorehowl"].mail[2589]'), get('account[2447]')), (30, 1, 100, 7, 40))
 
 
+    def test_empty_reading_at_logout_keeps_the_last_real_holdings(self):
+        self.lua.execute('_bags = {[2770]=30}')
+        self.g.fire('PLAYER_ENTERING_WORLD')
+        self.g.run_timers()
+        self.lua.execute('_bags = {}; _money = 0')                              # what the client answers during logout / reload
+        self.g.fire('PLAYER_LOGOUT')
+        get = lambda path: self.lua.eval('FMITrackerDB.%s' % path)
+        self.assertEqual((get('chars["Orakh Gorehowl"].bags[2770]'), get('chars["Orakh Gorehowl"].money') > 0), (30, True))
+
+    def test_mail_without_invoice_data_yet_is_looked_at_again(self):
+        self.lua.execute('_mail = {{sender="AH", subject="s", money=7600, daysLeft=29.5, invoice=nil, hide=true}}')
+        self.g.fire('MAIL_SHOW')
+        self.assertEqual(self.rows(), [])
+        self.lua.execute('_mail[1].invoice = {type="seller",name="Copper Ore",player="B",bid=8000,buyout=8000,deposit=300,cut=400,count=20}; _mail[1].hide = nil')
+        self.g.fire('MAIL_INBOX_UPDATE')
+        self.assertEqual([r[1] for r in self.rows()], ['as'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -127,8 +127,11 @@ local function ScanHoldings()
   local me = DB.chars[char]
   if not me then return end
   local g = bagGroups()
-  me.bags, me.bagsAt = countBags(g.bags), now()
-  me.money, me.level = GetMoney(), UnitLevel("player")
+  local bags, money = countBags(g.bags), GetMoney() or 0
+  -- During logout and reload the client answers with empty bags and 0 money: keep the last real reading instead.
+  if not next(bags) and money == 0 and me.bagsAt then return end
+  me.bags, me.bagsAt = bags, now()
+  me.money, me.level = money, UnitLevel("player")
   if bankOpen then
     local bank = countBags(g.bank)
     if next(bank) or not me.bank then me.bank, me.bankAt = bank, now() end
@@ -161,12 +164,16 @@ local function ScheduleHoldings()
 end
 
 -- ---------------------------------------------------------------- auction mail invoices
+local lastPlain = false
+local stats = { mails = 0, invoices = 0 }   -- this session, shown by /fmit
+
 local function invoiceFor(i)
+  lastPlain = false
   -- An invoice is available after the mail text has been read; reading it marks the mail as read, nothing else.
   local getText = GetInboxText
   if getText then
     local ok, _, _, _, isInvoice = pcall(getText, i)
-    if ok and isInvoice == false then return nil end
+    if ok and isInvoice == false then lastPlain = true; return nil end
   end
   local get = GetInboxInvoiceInfo or (C_Mail and C_Mail.GetInboxInvoiceInfo)
   if not get then return nil end
@@ -187,8 +194,11 @@ local function ScanMail()
     local sig = table.concat({ tostring(sender), tostring(subject), tostring(money), minute }, ":")
     local invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count
     if not scanned[sig] then
-      scanned[sig] = true
       invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count = invoiceFor(i)
+      -- a mail whose answer was empty for any other reason (data not loaded yet) is looked at again
+      if invoiceType or lastPlain then scanned[sig] = true end
+      stats.mails = stats.mails + 1
+      if invoiceType then stats.invoices = stats.invoices + 1 end
     end
     if invoiceType and itemName then
       local price = (bid and bid > 0) and bid or (buyout or 0)
@@ -369,6 +379,6 @@ SLASH_FMITRACKER1 = "/fmit"
 SlashCmdList["FMITRACKER"] = function(msg)
   if not DB then return end
   local n = #DB.log
-  print("|cff66ccffFMI Tracker " .. VERSION .. "|r: " .. n .. " entries (written to the file on /reload or logout).")
+  print("|cff66ccffFMI Tracker " .. VERSION .. "|r: " .. n .. " entries (written to the file on /reload or logout). Mails looked at: " .. stats.mails .. ", auction invoices found: " .. stats.invoices .. ".")
   for i = math.max(1, n - 4), n do print("  " .. DB.log[i]) end
 end

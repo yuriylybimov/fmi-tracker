@@ -1,0 +1,9 @@
+package-as: FMITracker
+
+ignore:
+  - tests
+  - docs
+  - .github
+  - requirements-dev.txt
+  - CHANGELOG.md
+  - .gitignore

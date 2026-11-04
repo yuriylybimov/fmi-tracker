@@ -1,0 +1,20 @@
+name: release
+# Pushing a tag such as v0.1.0 packages the addon with the BigWigs packager and uploads it to GitHub releases.
+# CurseForge, Wago and WoWInterface upload only when the matching secret exists (CF_API_KEY, WAGO_API_TOKEN, WOWI_API_TOKEN)
+# and the project ids are in the .toc (X-Curse-Project-ID, X-Wago-ID, X-WoWI-ID).
+on:
+  push:
+    tags: ['v*']
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    env:
+      CF_API_KEY: ${{ secrets.CF_API_KEY }}
+      WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
+      WOWI_API_TOKEN: ${{ secrets.WOWI_API_TOKEN }}
+      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: BigWigsMods/packager@v2

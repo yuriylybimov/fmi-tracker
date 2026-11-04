@@ -55,6 +55,15 @@ local function Log(kind, itemId, name, qty, a, b, c)
   if #log > MAX_LOG + 1000 then trim() end
 end
 
+local function Dbg(msg)
+  -- a short rolling diagnostic trail, kept in the saved file so a missing entry can be explained afterwards
+  if not DB then return end
+  local d = DB.dbg or {}
+  DB.dbg = d
+  d[#d + 1] = now() .. "|" .. tostring(msg)
+  while #d > 80 do table.remove(d, 1) end
+end
+
 local function itemName(id)
   local fn = C_Item and C_Item.GetItemNameByID
   if fn then local ok, n = pcall(fn, id); if ok and n then return n end end
@@ -123,9 +132,39 @@ end
 
 local bankOpen, bagTimer = false, false
 
+-- Professions: skill line ids from GetProfessions (the same ids on every client language). Where that call does not exist,
+-- the English skill names from the skill list are kept as a fallback. An empty answer never replaces a known list (logout).
+local function packed(...) return select("#", ...), { ... } end
+local function ScanProfessions()
+  local me = DB.chars[char]
+  if not me then return end
+  local found, names = {}, {}
+  if GetProfessions and GetProfessionInfo then
+    local n, list = packed(GetProfessions())
+    for i = 1, n do
+      local idx = list[i]
+      if idx then
+        local _, _, level, _, _, _, line = GetProfessionInfo(idx)
+        if line then found[line] = level or 0 end
+      end
+    end
+  end
+  if not next(found) and GetNumSkillLines and GetSkillLineInfo then
+    for i = 1, GetNumSkillLines() do
+      local name, header, _, level = GetSkillLineInfo(i)
+      if name and not header then names[name] = level or 0 end
+    end
+  end
+  if next(found) or next(names) or not me.prof then
+    me.prof, me.profNames, me.profAt = found, names, now()
+  end
+end
+
+
 local function ScanHoldings()
   local me = DB.chars[char]
   if not me then return end
+  pcall(ScanProfessions)
   local g = bagGroups()
   local bags, money = countBags(g.bags), GetMoney() or 0
   -- During logout and reload the client answers with empty bags and 0 money: keep the last real reading instead.
@@ -164,22 +203,42 @@ local function ScheduleHoldings()
 end
 
 -- ---------------------------------------------------------------- auction mail invoices
-local lastPlain = false
 local stats = { mails = 0, invoices = 0 }   -- this session, shown by /fmit
 
 local function invoiceFor(i)
-  lastPlain = false
-  -- An invoice is available after the mail text has been read; reading it marks the mail as read, nothing else.
-  local getText = GetInboxText
-  if getText then
-    local ok, _, _, _, isInvoice = pcall(getText, i)
-    if ok and isInvoice == false then lastPlain = true; return nil end
-  end
+  -- Reading the mail text loads the invoice (and marks the mail as read, nothing else). The "is an invoice" flag of the text is not
+  -- trusted: on the Retail client an "Auction won" mail reports false and still has its invoice.
+  if GetInboxText then pcall(GetInboxText, i) end
   local get = GetInboxInvoiceInfo or (C_Mail and C_Mail.GetInboxInvoiceInfo)
   if not get then return nil end
   local ok, invoiceType, itemName, playerName, bid, buyout, deposit, consignment, _, _, _, count = pcall(get, i)
+  Dbg("invoice ok=" .. tostring(ok) .. " type=" .. tostring(invoiceType) .. " item=" .. tostring(itemName) .. " bid=" .. tostring(bid) ..
+      " buyout=" .. tostring(buyout) .. " deposit=" .. tostring(deposit) .. " cut=" .. tostring(consignment) .. " count=" .. tostring(count))
   if not ok or not invoiceType then return nil end
   return invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count
+end
+
+-- Without invoice data the subject still says what happened: "Auction won: X" / "Auction successful: X".
+local function prefixOf(fmt)
+  if type(fmt) ~= "string" then return nil end
+  local p = fmt:gsub("%%s", "")
+  p = p:gsub("^%s+", ""):gsub("%s+$", "")
+  return p ~= "" and p or nil
+end
+
+local function fromSubject(i, subject, money)
+  if type(subject) ~= "string" then return nil end
+  local won, sold = prefixOf(AUCTION_WON_MAIL_SUBJECT), prefixOf(AUCTION_SOLD_MAIL_SUBJECT)
+  local name
+  if won and subject:sub(1, #won) == won then
+    name = subject:sub(#won + 1):gsub("^%s+", "")
+    local ok, _, itemId, _, n = pcall(GetInboxItem, i, 1)
+    return "buyer", name, "", 0, 0, 0, 0, (ok and n) or 0, ok and itemId or nil
+  elseif sold and subject:sub(1, #sold) == sold then
+    name = subject:sub(#sold + 1):gsub("^%s+", "")
+    return "seller", name, "", 0, money or 0, 0, 0, 0, nil
+  end
+  return nil
 end
 
 local scanned = {}          -- mails already looked at in this session (reading a mail marks it as read: do it once)
@@ -192,13 +251,17 @@ local function ScanMail()
     local _, _, sender, subject, money, _, daysLeft = GetInboxHeaderInfo(i)
     local minute = math.floor((t + (daysLeft or 0) * 86400) / 60)
     local sig = table.concat({ tostring(sender), tostring(subject), tostring(money), minute }, ":")
-    local invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count
-    if not scanned[sig] then
+    local invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count, itemId
+    if (scanned[sig] or 0) < 3 then
       invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count = invoiceFor(i)
-      -- a mail whose answer was empty for any other reason (data not loaded yet) is looked at again
-      if invoiceType or lastPlain then scanned[sig] = true end
+      if not invoiceType then
+        invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count, itemId = fromSubject(i, subject, money)
+      end
+      -- a mail that told us nothing is looked at again (its data may not be loaded yet); a mail with a result is done
+      scanned[sig] = invoiceType and 3 or (scanned[sig] or 0) + 1   -- three looks at most for a mail that tells nothing
       stats.mails = stats.mails + 1
       if invoiceType then stats.invoices = stats.invoices + 1 end
+      Dbg("mail " .. tostring(sender) .. " / " .. tostring(subject) .. " money=" .. tostring(money) .. " -> " .. tostring(invoiceType))
     end
     if invoiceType and itemName then
       local price = (bid and bid > 0) and bid or (buyout or 0)
@@ -207,7 +270,7 @@ local function ScanMail()
       -- the expiry estimate moves by a second or two between looks: a neighbouring minute is the same mail
       if not (DB.seen[key] or DB.seen[base .. ":" .. (minute - 1)] or DB.seen[base .. ":" .. (minute + 1)]) then
         DB.seen[key] = t
-        local id = itemIdOf(GetInboxItemLink and GetInboxItemLink(i, 1)) or itemIdOf(itemName)
+        local id = itemId or itemIdOf(GetInboxItemLink and GetInboxItemLink(i, 1)) or itemIdOf(itemName)
         if invoiceType == "seller" then
           Log("as", id, itemName, count or 0, price, consignment or 0, deposit or 0)
         elseif invoiceType == "buyer" then
@@ -261,6 +324,7 @@ local function CheckMerchant()
   end
   local money = GetMoney()
   local dm = money - (merchant.money or money)
+  if nSold > 0 or nBought > 0 then Dbg("merchant sold=" .. nSold .. " bought=" .. nBought .. " money change=" .. dm) end
   if nSold > 0 and nBought == 0 and dm > 0 then
     local weight, total = {}, 0
     for id, q in pairs(sold) do weight[id] = math.max(sellPriceOf(id), 1) * q; total = total + weight[id] end
@@ -364,8 +428,10 @@ f:SetScript("OnEvent", function(_, event, arg1)
     bankOpen = false
   elseif event == "MERCHANT_SHOW" then
     merchant = { bags = bagCounts(), money = GetMoney() }
+    Dbg("merchant opened")
   elseif event == "MERCHANT_CLOSED" then
     safe(CheckMerchant)
+    Dbg("merchant closed")
     merchant = nil
   elseif event == "BAG_UPDATE_DELAYED" then
     if merchant then safe(CheckMerchant) end

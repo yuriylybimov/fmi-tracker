@@ -10,6 +10,7 @@ Works on Retail (Interface 120105) and WoW Forever (16001): both use the modern 
 - **Auction sales and purchases**, from the mail invoices ("Auction successful", "Auction won"): price, auction house cut, deposit. Needs the mailbox to be opened (you open it anyway to collect the gold). Each mail is recorded once.
 - **Vendor sales and purchases**, from the change of your bags while a merchant window is open.
 - **Repairs, flights, trainers**: the money spent right after the action.
+- **Professions** of each character (skill line ids), so a reader can tell which crafts the player can make.
 - **What each character holds**: bags (always), bank and shared bank (when you open them), mailbox attachments (when you open the mailbox). Items with bonus ids, enchants, gems or a suffix are kept as variants.
 
 Not recorded (yet): lost deposits (expired or cancelled auctions), quest and loot money, trades between players, the guild bank.

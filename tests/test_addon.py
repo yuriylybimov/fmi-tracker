@@ -82,5 +82,34 @@ class Addon(unittest.TestCase):
         self.assertEqual([r[1] for r in self.rows()], ['as'])
 
 
+    def test_invoice_is_read_even_when_the_text_says_it_is_not_one(self):
+        self.lua.execute('_mail = {{sender="Auction House", subject="Auction won: Linen Cloth", money=0, daysLeft=29.5, flagfalse=true, link="|Hitem:2589::|h",'
+                         ' invoice={type="buyer",name="Linen Cloth",player="S",bid=100,buyout=100,deposit=0,cut=0,count=1}}}')
+        self.g.fire('MAIL_SHOW')
+        self.assertEqual([(r[1], r[2], r[4], r[5]) for r in self.rows()], [('ab', '2589', '1', '100')])
+
+    def test_mail_subject_is_the_fallback_when_there_is_no_invoice_data(self):
+        self.lua.execute('_mail = {{sender="Auction House", subject="Auction won: Linen Cloth", money=0, daysLeft=29.5, att={2589, 5}},'
+                         '{sender="Auction House", subject="Auction successful: Copper Ore", money=7600, daysLeft=29.5}}')
+        self.g.fire('MAIL_SHOW')
+        self.g.fire('MAIL_INBOX_UPDATE')
+        self.assertEqual([(r[1], r[2], r[3], r[4], r[5]) for r in self.rows()], [('ab', '2589', 'Linen Cloth', '5', '0'), ('as', '2770', 'Copper Ore', '0', '7600')])
+
+    def test_professions_are_recorded_by_skill_line_and_survive_an_empty_reading(self):
+        self.lua.execute('function GetProfessions() return 3, nil, nil, 5, 2 end '
+                         'function GetProfessionInfo(i) return "n", "i", i * 10, 300, 0, 0, ({[2]=185,[3]=171,[5]=356})[i] end')
+        self.g.fire('PLAYER_ENTERING_WORLD'); self.g.run_timers()
+        self.assertEqual(self.lua.eval('FMITrackerDB.chars["Orakh Gorehowl"] and 1 or 0') + self.lua.eval('FMITrackerDB.chars[next(FMITrackerDB.chars)].prof[171]'), 1 + 30)
+        self.lua.execute('function GetProfessions() return nil end')
+        self.g.fire('PLAYER_LOGOUT')
+        self.assertEqual(self.lua.eval('FMITrackerDB.chars[next(FMITrackerDB.chars)].prof[185]'), 20)
+
+    def test_professions_fall_back_to_skill_names(self):
+        self.lua.execute('function GetNumSkillLines() return 2 end '
+                         'function GetSkillLineInfo(i) if i == 1 then return "Professions", true end return "Cooking", false, 0, 75 end')
+        self.g.fire('PLAYER_ENTERING_WORLD'); self.g.run_timers()
+        self.assertEqual(self.lua.eval('FMITrackerDB.chars[next(FMITrackerDB.chars)].profNames.Cooking'), 75)
+
+
 if __name__ == '__main__':
     unittest.main()

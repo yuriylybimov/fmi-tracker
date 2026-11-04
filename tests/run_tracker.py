@@ -25,6 +25,8 @@ function UnitLevel() return 12 end
 function UnitClass() return "Warrior", "WARRIOR" end
 function GetMoney() return _money end
 function print(...) end
+AUCTION_WON_MAIL_SUBJECT = "Auction won: %s"
+AUCTION_SOLD_MAIL_SUBJECT = "Auction successful: %s"
 C_Timer = { After = function(sec, fn) table.insert(_timers, fn) end }
 C_Item = {
   GetItemInfoInstant = function(x) if type(x) == "number" then return x end
@@ -45,7 +47,7 @@ C_Container = {
 }
 function GetInboxNumItems() return #_mail, #_mail end
 function GetInboxHeaderInfo(i) local m = _mail[i]; return "p", "s", m.sender, m.subject, m.money, 0, m.daysLeft end
-function GetInboxText(i) if _mail[i].hide then return nil end return "", "", false, _mail[i].invoice ~= nil end
+function GetInboxText(i) if _mail[i].hide then return nil end return "", "", false, (_mail[i].invoice ~= nil) and not _mail[i].flagfalse end
 function GetInboxInvoiceInfo(i)
   local v = _mail[i].invoice; if not v or _mail[i].hide then return nil end
   return v.type, v.name, v.player, v.bid, v.buyout, v.deposit, v.cut, 0, 0, 0, v.count

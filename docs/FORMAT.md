@@ -10,13 +10,14 @@ FMITrackerDB = {
                                  money = copper, level = n, class = "WARRIOR", bagsAt = ts, bankAt = ts, mailAt = ts, seen = ts,
                                  prof = {[skillLineId] = skillLevel}, profNames = {["English skill name"] = level}, profAt = ts } },
   account = { [itemId] = count },       -- the shared (warband) bank, when it has been opened
-  seen = { [dedupe key] = ts },         -- the addon's own bookkeeping, ignore
+  seen = { [dedupe key] = ts }, seenN = { [dedupe key] = n },   -- the addon's own bookkeeping, ignore
 }
 ```
 
 * `<character>`: `Name-Realm` on Retail, `Name Surname` in WoW Forever.
 * A holdings key is the item id, or the string `"v<itemId>"` for a variant (bonus ids, enchant, gems or suffix): never treat it as the plain item.
 * `ts` is server time (UTC epoch seconds). Money is copper.
+* `bank` is read only while the bank window is open (0.2.0: from the purchased bank tabs). `bankAt` says when; a missing `bank` means "never seen", not "empty". A new login keeps it.
 
 ## Log lines
 

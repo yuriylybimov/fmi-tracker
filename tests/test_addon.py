@@ -110,6 +110,61 @@ class Addon(unittest.TestCase):
         self.g.fire('PLAYER_ENTERING_WORLD'); self.g.run_timers()
         self.assertEqual(self.lua.eval('FMITrackerDB.chars[next(FMITrackerDB.chars)].profNames.Cooking'), 75)
 
+    get = lambda self, path: self.lua.eval('FMITrackerDB.%s' % path)
+
+    def test_bank_tabs_are_asked_from_the_game_like_bagbrother_does(self):
+        # Forever / modern client: purchased tabs from C_Bank.FetchPurchasedBankTabData, the tab id is the container id
+        self.lua.execute('Enum.BankType = {Character = 0, Account = 2}; '
+                         'C_Bank = {FetchPurchasedBankTabData = function(t) if t == 0 then return {{ID = 6}, {ID = 7}} end return {} end}; '
+                         '_bank = {[6] = {[2840] = 200}, [7] = {[2835] = 40}}')
+        self.g.fire('BANKFRAME_OPENED')
+        self.assertEqual((self.get('chars["Orakh Gorehowl"].bank[2840]'), self.get('chars["Orakh Gorehowl"].bank[2835]')), (200, 40))
+
+    def test_bank_survives_closing_the_window_and_a_new_login(self):
+        self.lua.execute('_bank = {[6] = {[2840] = 225}}')
+        self.g.fire('BANKFRAME_OPENED')
+        self.lua.execute('_bank = {}')                       # after closing the client gives no bank answer
+        self.g.fire('BANKFRAME_CLOSED')
+        self.g.fire('BAG_UPDATE_DELAYED'); self.g.run_timers()
+        self.g.fire('PLAYER_LOGIN')                          # /reload or a new login
+        self.g.fire('PLAYER_ENTERING_WORLD'); self.g.run_timers()
+        self.assertEqual(self.get('chars["Orakh Gorehowl"].bank[2840]'), 225)
+
+    def test_a_deposit_while_the_bank_is_open_is_seen(self):
+        self.lua.execute('_bank = {[6] = {[2840] = 200}}')
+        self.g.fire('BANKFRAME_OPENED')
+        self.lua.execute('_bank = {[6] = {[2840] = 210}}')
+        self.g.fire('PLAYERBANKSLOTS_CHANGED'); self.g.run_timers()
+        self.assertEqual(self.get('chars["Orakh Gorehowl"].bank[2840]'), 210)
+
+    def test_two_identical_sales_are_two_entries_and_rereading_adds_none(self):
+        sale = '{sender="AH", subject="Auction successful: Rough Stone", money=614, daysLeft=29.5, invoice={type="seller",name="Rough Stone",player="",bid=646,buyout=646,deposit=100,cut=32,count=38}}'
+        self.lua.execute('_mail = {%s, %s}' % (sale, sale))
+        for ev in ('MAIL_SHOW', 'MAIL_INBOX_UPDATE', 'MAIL_SHOW'):
+            self.g.fire(ev)
+        self.assertEqual([r[1] for r in self.rows()], ['as', 'as'])
+        self.lua.execute('table.remove(_mail, 1)')            # the player takes one: still two entries, no new one
+        self.g.fire('MAIL_INBOX_UPDATE')
+        self.lua.execute('_t = _t + 3')
+        self.g.fire('MAIL_SHOW')
+        self.assertEqual(len(self.rows()), 2)
+
+    def test_a_third_identical_sale_arriving_later_is_added(self):
+        sale = '{sender="AH", subject="Auction successful: Rough Stone", money=614, daysLeft=29.5, invoice={type="seller",name="Rough Stone",player="",bid=646,buyout=646,deposit=100,cut=32,count=38}}'
+        self.lua.execute('_mail = {%s}' % sale)
+        self.g.fire('MAIL_SHOW')
+        self.lua.execute('table.insert(_mail, %s)' % sale)
+        self.g.fire('MAIL_INBOX_UPDATE')
+        self.assertEqual(len(self.rows()), 2)
+
+    def test_old_dedupe_keys_from_0_1_0_still_count_as_logged(self):
+        self.lua.execute('_mail = {{sender="AH", subject="s", money=7600, daysLeft=29.5, invoice={type="seller",name="Copper Ore",player="B",bid=8000,buyout=8000,deposit=300,cut=400,count=20}}}')
+        minute = '%d' % ((1000000 + 29.5 * 86400) // 60)
+        self.lua.execute('FMITrackerDB.seen["seller:Copper Ore:B:8000:300:400:20:%s"] = _t; FMITrackerDB.seenN = nil' % minute)
+        self.g.fire('MAIL_SHOW')
+        self.assertEqual(self.rows(), [])
+
+
 
 if __name__ == '__main__':
     unittest.main()

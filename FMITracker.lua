@@ -1,4 +1,4 @@
--- FMI Tracker 0.1.0
+-- FMI Tracker 0.2.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -15,7 +15,8 @@
 --   rp / tx / tr: a = copper paid
 -- The file is written by the game on /reload or logout. Money is in copper, time is server time (UTC epoch).
 
-local VERSION = "0.1.0"
+local VERSION = "0.2.0"
+local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
 local MAX_LOG = 20000          -- about 1.5 MB of saved variables at most; the oldest entries go first
@@ -118,14 +119,42 @@ local function addTo(into, id, n, link)
 end
 
 local function countBags(ids)
-  local out, C = {}, C_Container
-  if not C then return out end
+  -- returns the items and the number of slots the client answered for (0 slots = the client gave no reading)
+  local out, C, total = {}, C_Container, 0
+  if not C then return out, 0 end
   for _, bag in ipairs(ids) do
     local slots = C.GetContainerNumSlots(bag) or 0
+    total = total + slots
     for slot = 1, slots do
       local info = C.GetContainerItemInfo(bag, slot)
       if info and info.itemID then addTo(out, info.itemID, info.stackCount or 1, info.hyperlink) end
     end
+  end
+  return out, total
+end
+
+-- The bank of the modern client (WoW Forever, Retail): tabs the player bought, asked from the game as BagBrother does
+-- (C_Bank.FetchPurchasedBankTabData(Enum.BankType.Character / .Account), each tab is a container with its own bag id).
+-- Older clients: the fixed bank containers from bagGroups().
+local function bankBagIds()
+  local out = { char = {}, account = {} }
+  local CB, BT = C_Bank, Enum and Enum.BankType
+  if CB and CB.FetchPurchasedBankTabData and BT then
+    for key, kind in pairs({ char = BT.Character, account = BT.Account }) do
+      if kind ~= nil then
+        local ok, tabs = pcall(CB.FetchPurchasedBankTabData, kind)
+        if ok and type(tabs) == "table" then
+          for _, tab in pairs(tabs) do
+            if type(tab) == "table" and tab.ID then out[key][#out[key] + 1] = tab.ID end
+          end
+        end
+      end
+    end
+  end
+  if #out.char == 0 then
+    local g = bagGroups()
+    out.char = g.bank
+    if #out.account == 0 then out.account = g.account end
   end
   return out
 end
@@ -161,6 +190,18 @@ local function ScanProfessions()
 end
 
 
+-- Read only while the bank window is open: the client answers for the bank then and not after it closes.
+-- A reading with no slots at all is "no answer" and never replaces what is known; an empty bank with slots is real.
+local function ScanBank()
+  local me = DB.chars[char]
+  if not me or not bankOpen then return end
+  local ids = bankBagIds()
+  local bank, slots = countBags(ids.char)
+  if slots > 0 then me.bank, me.bankAt = bank, now() end
+  local account, aslots = countBags(ids.account)
+  if aslots > 0 then DB.account, DB.accountAt = account, now() end
+end
+
 local function ScanHoldings()
   local me = DB.chars[char]
   if not me then return end
@@ -171,12 +212,7 @@ local function ScanHoldings()
   if not next(bags) and money == 0 and me.bagsAt then return end
   me.bags, me.bagsAt = bags, now()
   me.money, me.level = money, UnitLevel("player")
-  if bankOpen then
-    local bank = countBags(g.bank)
-    if next(bank) or not me.bank then me.bank, me.bankAt = bank, now() end
-    local account = countBags(g.account)
-    if next(account) then DB.account, DB.accountAt = account, now() end
-  end
+  if bankOpen then ScanBank() end
 end
 
 local function ScanMailItems()
@@ -241,35 +277,47 @@ local function fromSubject(i, subject, money)
   return nil
 end
 
-local scanned = {}          -- mails already looked at in this session (reading a mail marks it as read: do it once)
+-- What each mail said, per session. Identical mails (same sender, subject, money, expiry minute) are told apart by their
+-- order in the inbox ("#1", "#2"), so two equal sales are two entries. A mail that told nothing gets three looks at most.
+local looked = {}
+
+local function pack(...) return { n = select("#", ...), ... } end
 
 local function ScanMail()
   if not GetInboxNumItems then return end
   local num = GetInboxNumItems() or 0
   local t = now()
+  local order, here = {}, {}
+  DB.seenN = DB.seenN or {}
   for i = 1, num do
     local _, _, sender, subject, money, _, daysLeft = GetInboxHeaderInfo(i)
     local minute = math.floor((t + (daysLeft or 0) * 86400) / 60)
-    local sig = table.concat({ tostring(sender), tostring(subject), tostring(money), minute }, ":")
-    local invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count, itemId
-    if (scanned[sig] or 0) < 3 then
-      invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count = invoiceFor(i)
-      if not invoiceType then
-        invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count, itemId = fromSubject(i, subject, money)
-      end
-      -- a mail that told us nothing is looked at again (its data may not be loaded yet); a mail with a result is done
-      scanned[sig] = invoiceType and 3 or (scanned[sig] or 0) + 1   -- three looks at most for a mail that tells nothing
+    local sig0 = table.concat({ tostring(sender), tostring(subject), tostring(money), minute }, ":")
+    order[sig0] = (order[sig0] or 0) + 1
+    local sig = sig0 .. "#" .. order[sig0]
+    local r = looked[sig]
+    if type(r) ~= "table" and (r or 0) < 3 then
+      local res = pack(invoiceFor(i))
+      if not res[1] then res = pack(fromSubject(i, subject, money)) end
       stats.mails = stats.mails + 1
-      if invoiceType then stats.invoices = stats.invoices + 1 end
-      Dbg("mail " .. tostring(sender) .. " / " .. tostring(subject) .. " money=" .. tostring(money) .. " -> " .. tostring(invoiceType))
+      if res[1] then stats.invoices = stats.invoices + 1; looked[sig] = res else looked[sig] = (r or 0) + 1 end
+      Dbg("mail " .. tostring(sender) .. " / " .. tostring(subject) .. " money=" .. tostring(money) .. " -> " .. tostring(res[1]))
+      r = looked[sig]
     end
-    if invoiceType and itemName then
+    if type(r) == "table" and r[1] and r[2] then
+      local invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count, itemId = unpack(r, 1, 9)
       local price = (bid and bid > 0) and bid or (buyout or 0)
       local base = table.concat({ invoiceType, itemName, playerName or "", price, deposit or 0, consignment or 0, count or 0 }, ":")
+      -- the expiry estimate moves by a second or two between looks: a neighbouring minute is the same group of mails
       local key = base .. ":" .. minute
-      -- the expiry estimate moves by a second or two between looks: a neighbouring minute is the same mail
-      if not (DB.seen[key] or DB.seen[base .. ":" .. (minute - 1)] or DB.seen[base .. ":" .. (minute + 1)]) then
-        DB.seen[key] = t
+      if not DB.seen[key] then
+        if DB.seen[base .. ":" .. (minute - 1)] then key = base .. ":" .. (minute - 1)
+        elseif DB.seen[base .. ":" .. (minute + 1)] then key = base .. ":" .. (minute + 1) end
+      end
+      here[key] = (here[key] or 0) + 1
+      local logged = DB.seenN[key] or (DB.seen[key] and 1 or 0)
+      if here[key] > logged then              -- one more identical mail than recorded so far: a new sale or purchase
+        DB.seen[key], DB.seenN[key] = t, here[key]
         local id = itemId or itemIdOf(GetInboxItemLink and GetInboxItemLink(i, 1)) or itemIdOf(itemName)
         if invoiceType == "seller" then
           Log("as", id, itemName, count or 0, price, consignment or 0, deposit or 0)
@@ -393,6 +441,8 @@ f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:RegisterEvent("PLAYER_LOGOUT")
 f:RegisterEvent("BANKFRAME_OPENED")
 f:RegisterEvent("BANKFRAME_CLOSED")
+f:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
+pcall(f.RegisterEvent, f, "BANK_TABS_CHANGED")       -- not on every client
 
 f:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" then
@@ -401,13 +451,17 @@ f:SetScript("OnEvent", function(_, event, arg1)
     DB = FMITrackerDB
     DB.version, DB.log, DB.seen, DB.chars = VERSION, DB.log or {}, DB.seen or {}, DB.chars or {}
     local t = now()
-    for k, v in pairs(DB.seen) do if t - v > SEEN_DAYS * 86400 then DB.seen[k] = nil end end
+    DB.seenN = DB.seenN or {}
+    for k, v in pairs(DB.seen) do if t - v > SEEN_DAYS * 86400 then DB.seen[k], DB.seenN[k] = nil, nil end end
   elseif not DB then
     return
   elseif event == "PLAYER_LOGIN" then
     char = charKey()
     local level = UnitLevel("player")
-    DB.chars[char] = { level = level, class = select(2, UnitClass("player")), seen = now(), forever = WOW_PROJECT_ID == 18 or nil }
+    -- update the character, never replace it: bank and mail are only read when opened and must survive a new login
+    local me = DB.chars[char] or {}
+    DB.chars[char] = me
+    me.level, me.class, me.seen, me.forever = level, select(2, UnitClass("player")), now(), (WOW_PROJECT_ID == 18) or nil
     hook("RepairAllItems", "rp")
     hook("TakeTaxiNode", "tx")
     hook("BuyTrainerService", "tr")
@@ -422,10 +476,12 @@ f:SetScript("OnEvent", function(_, event, arg1)
     safe(ScanHoldings)
   elseif event == "BANKFRAME_OPENED" then
     bankOpen = true
+    safe(ScanBank)
     safe(ScheduleHoldings)
+  elseif event == "PLAYERBANKSLOTS_CHANGED" or event == "BANK_TABS_CHANGED" then
+    if bankOpen then safe(ScheduleHoldings) end
   elseif event == "BANKFRAME_CLOSED" then
-    safe(ScanHoldings)
-    bankOpen = false
+    bankOpen = false                                   -- the last reading taken while it was open stands
   elseif event == "MERCHANT_SHOW" then
     merchant = { bags = bagCounts(), money = GetMoney() }
     Dbg("merchant opened")

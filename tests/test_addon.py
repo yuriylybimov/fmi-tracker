@@ -49,6 +49,13 @@ class Addon(unittest.TestCase):
         self.assertEqual([(r[1], r[2], r[4], r[5]) for r in self.rows()],
                          [('vs', '2770', '10', '100'), ('vb', '2589', '5', '65'), ('rp', '0', '1', '250'), ('tx', '0', '1', '120')])
 
+    def test_profession_and_class_trainers_are_told_apart(self):
+        self.lua.execute('BuyTrainerService(1)')
+        self.g.setmoney(self.lua.eval('_money - 500'))
+        self.lua.execute('function IsTradeskillTrainer() return true end; BuyTrainerService(2)')
+        self.g.setmoney(self.lua.eval('_money - 90'))
+        self.assertEqual([(r[1], r[5]) for r in self.rows()], [('tr', '500'), ('tp', '90')])
+
     def test_holdings_bank_account_bank_mail_and_variants(self):
         self.lua.execute('_bags = {[2770]=30,[19019]=1}; _links[19019] = "|Hitem:19019::::::::60::::2:6652:1472|h"')
         self.g.fire('PLAYER_ENTERING_WORLD')

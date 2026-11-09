@@ -1,9 +1,9 @@
--- FMI Tracker 0.2.0
+-- FMI Tracker 0.3.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
 --   vs  vendor sale, vb vendor purchase (bag change while a merchant is open)
---   rp  repair, tx flight, tr trainer (money spent right after the action)
+--   rp  repair, tx flight, tr class trainer, tp profession trainer (money spent right after the action)
 -- and, per character, what it holds: FMITrackerDB.chars[name] = {bags, bank, mail = {[itemId] = count}, money, ...};
 -- the account (warband) bank is FMITrackerDB.account. A key "v<itemId>" is a VARIANT (bonus ids, enchant, gems, suffix):
 -- never priced like the plain item.
@@ -12,10 +12,10 @@
 --   as: a = price (copper, all units), b = AH cut, c = deposit returned
 --   ab: a = price paid (all units)
 --   vs: a = copper received (all units)   vb: a = copper paid (all units)
---   rp / tx / tr: a = copper paid
+--   rp / tx / tr / tp: a = copper paid (tr before 0.3.0 is any trainer)
 -- The file is written by the game on /reload or logout. Money is in copper, time is server time (UTC epoch).
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -413,6 +413,12 @@ local function OnMoney()
   lastMoney = m
 end
 
+-- a profession trainer (IsTradeskillTrainer) or a class / riding one; asked at the purchase, while the trainer is open
+local function trainerKind()
+  if IsTradeskillTrainer and IsTradeskillTrainer() then return "tp" end
+  return "tr"
+end
+
 local function hook(name, kind)
   local fn = _G[name]
   if type(fn) == "function" then hooksecurefunc(name, function() Expect(kind) end) return true end
@@ -464,8 +470,8 @@ f:SetScript("OnEvent", function(_, event, arg1)
     me.level, me.class, me.seen, me.forever = level, select(2, UnitClass("player")), now(), (WOW_PROJECT_ID == 18) or nil
     hook("RepairAllItems", "rp")
     hook("TakeTaxiNode", "tx")
-    hook("BuyTrainerService", "tr")
-    if C_Trainer and C_Trainer.BuyProvidedService then hooksecurefunc(C_Trainer, "BuyProvidedService", function() Expect("tr") end) end
+    if type(BuyTrainerService) == "function" then hooksecurefunc("BuyTrainerService", function() Expect(trainerKind()) end) end
+    if C_Trainer and C_Trainer.BuyProvidedService then hooksecurefunc(C_Trainer, "BuyProvidedService", function() Expect(trainerKind()) end) end
   elseif event == "MAIL_SHOW" or event == "MAIL_INBOX_UPDATE" then
     safe(ScanMail)
     safe(ScanMailItems)

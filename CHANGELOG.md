@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0 (9 Nov 2026)
+- **Profession trainers apart:** money paid to a profession trainer is logged as `tp`, to a class or riding trainer as `tr` (`IsTradeskillTrainer()` at the purchase). Entries written before keep `tr` for any trainer.
+- Test: 1 new (class and profession trainer).
+
 ## 0.2.0 (6 Nov 2026)
 - **Bank on WoW Forever and modern Retail:** the bank is read from the tabs the player bought (`C_Bank.FetchPurchasedBankTabData`, the way BagBrother does), while the bank window is open: on opening and on every change of its slots. Before, it was read when the window closed, when the client may no longer answer. Older clients keep the fixed bank containers.
 - **A new login no longer wipes the character:** level, class and the login time are updated; bags, bank, mail and professions are kept. Before, the bank disappeared after every login until the bank was opened again.

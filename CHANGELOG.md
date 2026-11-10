@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0 (10 Nov 2026)
+- **Live auction prices, no /reload:** while the auction house is open, FMI Tracker keeps what the game already shows you: the browse / search list (lowest price, quantity listed), the lots of a commodity and the lots of one item (lowest buyout per unit, bid-only lots left out). The tooltip shows it at once as **FMI AH now: price · N min ago · N listed**, above the app's lines, when it is newer than the app data and under 6 h old. It never sends a search itself.
+- Kept in `FMITrackerDB.live[itemId] = {copper per unit, quantity, time}` (the newest 3000 items), so it survives a reload. Variants (suffix, pet species) are not kept.
+- Tests: 3 new (browse / commodity / item results and variants, the tooltip line against app data, after a reload and when old).
+
+## 0.5.0 (10 Nov 2026)
+- **Tooltip lines from the app:** the Market Intelligence app writes a small addon `FMITracker_Data` (`Data.lua`, the table `FMITrackerAppData`) into the game's AddOns folder every 10 minutes when its data changed, the way the TSM desktop app feeds its helper addon. FMI Tracker reads it (the game loads it at login or `/reload`) and adds to item tooltips: **FMI market** (market price; the lowest lot too when it is more than 10% under it), **FMI demand** (sells fast / steadily / slowly / not selling, about N a day, once the app has 48 h of turnover), **FMI your last sale / last buy** (per unit, how long ago) and **on your Watch list**. Prices older than 6 h add a grey note. A variant (bonus ids, enchant, suffix) never gets the price of the plain item.
+- `/fmit tooltip off|on`; `/fmit` also says which app data is loaded (house, items, age).
+- `FMITracker.tooltipLines(itemId, link)` for other addons.
+- The addon list: category "Auction & Economy" and a coin icon; the app's `FMITracker_Data` has the same category and a name starting with `FMITracker`, so it is listed under FMI Tracker (like QuestieDB under Questie), and loads only with it.
+- Tests: 4 new (lines, variants, old prices and switching off, no app data).
+
 ## 0.4.0 (10 Nov 2026)
 - **Save reminder:** the game writes the file only on `/reload`, logout or exit. When a mailbox or a merchant window closes and something new was recorded, a small plate offers "N new entries not saved for the app yet" with **Save for the app** (reloads the interface; a click, so the player's own action) and **Later** (waits until there is something new again). It never shows in combat or in an instance (it comes back after), and hides by itself after 45 s.
 - `/fmit save` writes the file now (reloads the interface); `/fmit prompt off|on` switches the reminder (kept in `FMITrackerDB.opt.prompt`); `/fmit` also says how many entries wait.

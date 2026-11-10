@@ -12,7 +12,8 @@ FMITrackerDB = {
   account = { [itemId] = count },       -- the shared (warband) bank, when it has been opened
   seen = { [dedupe key] = ts }, seenN = { [dedupe key] = n },   -- the addon's own bookkeeping, ignore
   savedAt = ts,                         -- 0.4.0: when the game last wrote this file (set at logout / reload)
-  opt = { prompt = true },              -- 0.4.0: the save reminder on or off
+  opt = { prompt = true, tooltip = true },   -- 0.4.0 / 0.5.0: the save reminder and the tooltip lines on or off
+  live = { [itemId] = { copper, quantity, ts } },   -- 0.6.0: the newest auction price the player saw (lowest per unit), 3000 items at most
 }
 ```
 

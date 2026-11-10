@@ -231,6 +231,87 @@ class Addon(unittest.TestCase):
         self.g.fire('PLAYER_LOGOUT')
         self.assertEqual(self.lua.eval('FMITrackerDB.savedAt'), 1234567)
 
+    # ------------------------------------------------------------ tooltip lines from the app (0.5.0)
+    def lines(self, item_id, link=None):
+        t = self.lua.eval('FMITracker.tooltipLines')(item_id, link)
+        return [tuple(v for v in (l[1], l[2]) if v is not None) for l in t.values()]
+
+    def app_data(self, at_offset=0):
+        self.lua.execute('_t = 2000000; FMITrackerAppData = {["v"] = 1, ["house"] = "Horde #113", ["region"] = "EU", ["at"] = %d, '
+                         '["items"] = {[2770] = {12550, 11000, 300, 3, 41.5}, [2589] = {50, 49, 12, 0}}, ["watch"] = {[2770] = true}, '
+                         '["sold"] = {[2770] = {11900, 2000000 - 7200}}, ["bought"] = {[2589] = {45, 2000000 - 600}}}' % (2000000 - at_offset))
+
+    def test_market_lowest_demand_own_trades_and_the_watch_mark(self):
+        self.app_data()
+        self.assertEqual(self.lines(2770), [('FMI market', '1g 25s 50c'), ('  lowest lot', '1g 10s 0c'), ('FMI demand', 'sells fast · ~42/day'),
+                                            ('FMI your last sale', '1g 19s 0c · 2 h ago'), ('FMI: on your Watch list',)])
+        self.assertEqual(self.lines(2589), [('FMI market', '50c'), ('FMI demand', 'not selling'), ('FMI your last buy', '45c · 10 min ago')])
+        self.assertEqual(self.lines(999), [])
+
+    def test_a_variant_gets_no_price_of_the_plain_item(self):
+        self.app_data()
+        got = self.lines(2770, '|cffffffff|Hitem:2770::::::1234:::::|h[Copper Ore]|h|r')
+        self.assertNotIn('FMI market', [l[0] for l in got])
+        self.assertIn(('FMI: on your Watch list',), got)
+
+    def test_old_prices_say_so_and_the_lines_can_be_switched_off(self):
+        self.app_data(at_offset=8 * 3600)
+        self.assertEqual(self.lines(2770)[-1], ('FMI prices from 8 h ago (/reload after the app updates)',))
+        self.lua.execute('SlashCmdList["FMITRACKER"]("tooltip off")')
+        self.assertEqual(self.lines(2770), [])
+
+    def test_without_app_data_nothing_is_added(self):
+        self.lua.execute('FMITrackerAppData = nil')
+        self.assertEqual(self.lines(2770), [])
+
+    # ------------------------------------------------------------ live auction prices you see (0.6.0)
+    AH = ('C_AuctionHouse = {'
+          ' GetBrowseResults = function() return _browse end,'
+          ' GetNumCommoditySearchResults = function(id) return #(_comm[id] or {}) end,'
+          ' GetCommoditySearchResultInfo = function(id, i) return _comm[id][i] end,'
+          ' GetNumItemSearchResults = function(k) return #(_items[k.itemID] or {}) end,'
+          ' GetItemSearchResultInfo = function(k, i) return _items[k.itemID][i] end }')
+
+    def live(self, item_id):
+        v = self.lua.eval('FMITracker.live')(item_id)
+        return None if v is None else (v[1], v[2], v[3])
+
+    def test_browse_commodity_and_item_results_are_kept_variants_are_not(self):
+        self.lua.execute(self.AH)
+        self.lua.execute('_t = 3000000; _browse = {{itemKey = {itemID = 2770, itemLevel = 10, itemSuffix = 0, battlePetSpeciesID = 0}, minPrice = 120, totalQuantity = 340},'
+                         '{itemKey = {itemID = 15000, itemLevel = 30, itemSuffix = 1234, battlePetSpeciesID = 0}, minPrice = 999, totalQuantity = 1}}')
+        self.g.fire('AUCTION_HOUSE_BROWSE_RESULTS_UPDATED')
+        self.assertEqual(self.live(2770), (120, 340, 3000000))
+        self.assertIsNone(self.live(15000))                                 # a suffix variant
+        self.lua.execute('_t = 3000060; _comm = {[2770] = {{unitPrice = 118, quantity = 20}, {unitPrice = 125, quantity = 300}}}')
+        self.g.fire('COMMODITY_SEARCH_RESULTS_UPDATED', 2770)
+        self.assertEqual(self.live(2770), (118, 320, 3000060))
+        self.lua.execute('_items = {[2589] = {{buyoutAmount = 600, quantity = 10}, {buyoutAmount = 55, quantity = 1}, {bidAmount = 1, quantity = 1}}}')
+        self.lua.execute('_key = {itemID = 2589, itemLevel = 5, itemSuffix = 0, battlePetSpeciesID = 0}')
+        self.g.fire('ITEM_SEARCH_RESULTS_UPDATED', self.lua.eval('_key'))
+        self.assertEqual(self.live(2589), (55, 11, 3000060))                 # the lowest per unit; a bid-only lot left out
+
+    def test_the_live_price_leads_the_tooltip_and_needs_no_app_data(self):
+        self.lua.execute(self.AH)
+        self.lua.execute('FMITrackerAppData = nil; _t = 3000000; _browse = {{itemKey = {itemID = 2770, itemSuffix = 0, battlePetSpeciesID = 0}, minPrice = 12550, totalQuantity = 340}}')
+        self.g.fire('AUCTION_HOUSE_BROWSE_RESULTS_UPDATED')
+        self.lua.execute('_t = 3000120')
+        self.assertEqual(self.lines(2770), [('FMI AH now', '1g 25s 50c · 2 min ago · 340 listed')])
+        self.app_data()                                                       # older app data: the live line leads
+        self.lua.execute('_t = 3000120')
+        self.assertEqual(self.lines(2770)[0], ('FMI AH now', '1g 25s 50c · 2 min ago · 340 listed'))
+        self.lua.execute('FMITrackerAppData["at"] = 3000100')                 # app data newer than the live reading: no live line
+        self.assertNotIn('FMI AH now', [l[0] for l in self.lines(2770)])
+
+    def test_live_prices_survive_a_reload_and_old_ones_hide(self):
+        self.lua.execute(self.AH)
+        self.lua.execute('_t = 3000000; _browse = {{itemKey = {itemID = 2770, itemSuffix = 0, battlePetSpeciesID = 0}, minPrice = 120, totalQuantity = 5}}')
+        self.g.fire('AUCTION_HOUSE_BROWSE_RESULTS_UPDATED')
+        self.g.fire('ADDON_LOADED', 'FMITracker')                             # the saved table is read again after a reload
+        self.assertEqual(self.live(2770), (120, 5, 3000000))
+        self.lua.execute('FMITrackerAppData = nil; _t = 3000000 + 7 * 3600')
+        self.assertEqual(self.lines(2770), [])                                # older than 6 h: not shown as "now"
+
 
 if __name__ == '__main__':
     unittest.main()

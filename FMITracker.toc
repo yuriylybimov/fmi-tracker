@@ -1,8 +1,10 @@
 ## Interface: 16001, 120105
 ## Title: FMI Tracker
-## Notes: Records what only the game knows: auction mail invoices (sales and purchases), vendor trades, repairs, flights, class and profession trainers. Reads nothing from the auction house and automates nothing.
+## Notes: Records what only the game knows (auction mail invoices, vendor trades, repairs, flights, trainers) and shows in item tooltips the auction prices you see (live) and prices and demand from the Market Intelligence app. Never searches, buys or posts.
 ## Author: Market Intelligence (personal)
-## Version: 0.4.0
+## Version: 0.6.0
+## Category: Auction & Economy
+## IconTexture: Interface\Icons\INV_Misc_Coin_02
 ## SavedVariables: FMITrackerDB
 
 FMITracker.lua

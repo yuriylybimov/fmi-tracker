@@ -1,4 +1,4 @@
--- FMI Tracker 0.4.0
+-- FMI Tracker 0.6.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -16,8 +16,12 @@
 -- The file is written by the game on /reload or logout. Money is in copper, time is server time (UTC epoch).
 -- 0.4.0: after a mailbox or a merchant closes with new entries, a small plate offers to save them for the app; its button
 -- reloads the interface (the only way the game writes the file). Never in combat or in an instance. /fmit save, /fmit prompt.
+-- 0.5.0: reads FMITrackerAppData (the addon FMITracker_Data, written by the Market Intelligence app into the AddOns folder)
+-- and adds market price, demand, your last sale / purchase and the Watch mark to item tooltips. /fmit tooltip off|on.
+-- 0.6.0: remembers the auction prices the game shows you while the auction house is open (search results and an item's
+-- lots; it never searches by itself) and puts them in the tooltip at once: "FMI AH now", no /reload needed.
 
-local VERSION = "0.4.0"
+local VERSION = "0.6.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -502,6 +506,136 @@ local function safe(fn, ...)
   end
 end
 
+-- ---------------------------------------------------------------- live auction prices you see (0.6.0)
+-- While the auction house is open the game hands addons what it shows the player: the browse / search list (lowest
+-- price and quantity per item) and the lots of one item. FMI Tracker keeps the newest reading per plain item in
+-- FMITrackerDB.live[itemId] = {lowest copper per unit, quantity listed, time}. It never sends a search itself.
+-- Variants (suffix, pet species) are not kept. The oldest readings go first past MAX_LIVE.
+local MAX_LIVE = 3000
+local liveN = 0
+local function trimLive()
+  local all = {}
+  for id, v in pairs(DB.live) do all[#all + 1] = { id, v[3] or 0 } end
+  table.sort(all, function(a, b) return a[2] > b[2] end)
+  for i = MAX_LIVE + 1, #all do DB.live[all[i][1]] = nil end
+  liveN = math.min(#all, MAX_LIVE)
+end
+local function Seen(itemId, unit, qty)
+  if not DB or not itemId or not unit or unit <= 0 then return end
+  if not DB.live[itemId] then liveN = liveN + 1 end
+  DB.live[itemId] = { math.floor(unit), math.floor(qty or 0), now() }
+  if liveN > MAX_LIVE + 200 then trimLive() end
+end
+local function plainKey(key)
+  return type(key) == "table" and key.itemID and (key.itemSuffix or 0) == 0 and (key.battlePetSpeciesID or 0) == 0
+end
+local function ReadBrowse(results)
+  local AH = C_AuctionHouse
+  results = results or (AH and AH.GetBrowseResults and AH.GetBrowseResults())
+  for _, r in ipairs(results or {}) do
+    if plainKey(r.itemKey) and r.minPrice then Seen(r.itemKey.itemID, r.minPrice, r.totalQuantity) end
+  end
+end
+local function ReadCommodity(itemId)
+  local AH = C_AuctionHouse
+  if not (AH and itemId and AH.GetNumCommoditySearchResults) then return end
+  local n = AH.GetNumCommoditySearchResults(itemId) or 0
+  if n < 1 then return end
+  local first = AH.GetCommoditySearchResultInfo(itemId, 1)
+  local qty = AH.GetCommoditySearchResultsQuantity and AH.GetCommoditySearchResultsQuantity(itemId)
+  if not qty then qty = 0; for i = 1, n do local r = AH.GetCommoditySearchResultInfo(itemId, i); qty = qty + ((r and r.quantity) or 0) end end
+  if first and first.unitPrice then Seen(itemId, first.unitPrice, qty) end
+end
+local function ReadItem(itemKey)
+  local AH = C_AuctionHouse
+  if not (AH and plainKey(itemKey) and AH.GetNumItemSearchResults) then return end
+  local n, low, qty = AH.GetNumItemSearchResults(itemKey) or 0, nil, 0
+  for i = 1, n do
+    local r = AH.GetItemSearchResultInfo(itemKey, i)
+    if r and r.buyoutAmount and (r.quantity or 0) > 0 then
+      local unit = r.buyoutAmount / r.quantity
+      if not low or unit < low then low = unit end
+      qty = qty + r.quantity
+    end
+  end
+  if low then Seen(itemKey.itemID, low, qty) end
+end
+
+-- ---------------------------------------------------------------- tooltip lines from the app (0.5.0)
+-- FMITrackerAppData comes from the addon FMITracker_Data that the Market Intelligence app writes into the AddOns folder
+-- (read by the game at login or /reload). items[id] = {market, min, units, tier, perDay}; sold/bought[id] = {unit, ts}.
+local TIER = { [3] = "sells fast", [2] = "sells steadily", [1] = "sells slowly", [0] = "not selling" }
+local function coins(c)
+  c = math.floor(tonumber(c) or 0)
+  if GetCoinTextureString then return GetCoinTextureString(c) end
+  local g, si, co = math.floor(c / 10000), math.floor(c / 100) % 100, c % 100
+  local out = {}
+  if g > 0 then out[#out + 1] = g .. "g" end
+  if g > 0 or si > 0 then out[#out + 1] = si .. "s" end
+  out[#out + 1] = co .. "c"
+  return table.concat(out, " ")
+end
+local function agoText(ts)
+  local d = now() - (tonumber(ts) or 0)
+  if d < 3600 then return math.max(1, math.floor(d / 60)) .. " min ago" end
+  if d < 172800 then return math.floor(d / 3600) .. " h ago" end
+  return math.floor(d / 86400) .. " d ago"
+end
+-- The lines for one item: a list of {left, right} (right may be nil). A variant (bonus ids, enchant, suffix) gets no
+-- price of the plain item.
+local function TooltipLines(itemId, link)
+  if not itemId then return {} end
+  if DB and DB.opt and DB.opt.tooltip == false then return {} end
+  local A = type(FMITrackerAppData) == "table" and FMITrackerAppData or {}
+  local out = {}
+  local variant = isVariant(link)
+  local lv = (not variant) and DB and DB.live and DB.live[itemId]
+  if lv and now() - lv[3] < 6 * 3600 and (not A.at or lv[3] >= A.at) then
+    out[#out + 1] = { "FMI AH now", coins(lv[1]) .. " · " .. agoText(lv[3]) .. ((lv[2] or 0) > 0 and (" · " .. lv[2] .. " listed") or "") }
+  end
+  local it = (not variant) and A.items and A.items[itemId]
+  if it then
+    local market, min, tier, perDay = it[1], it[2], it[4], it[5]
+    if market or min then out[#out + 1] = { "FMI market", coins(market or min) } end
+    if market and min and min < market * 0.9 then out[#out + 1] = { "  lowest lot", coins(min) } end
+    if tier and TIER[tier] then
+      out[#out + 1] = { "FMI demand", TIER[tier] .. ((perDay and perDay > 0) and (" · ~" .. math.floor(perDay + 0.5) .. "/day") or "") }
+    end
+  end
+  local s, b = A.sold and A.sold[itemId], A.bought and A.bought[itemId]
+  if s then out[#out + 1] = { "FMI your last sale", coins(s[1]) .. " · " .. agoText(s[2]) } end
+  if b then out[#out + 1] = { "FMI your last buy", coins(b[1]) .. " · " .. agoText(b[2]) } end
+  if A.watch and A.watch[itemId] then out[#out + 1] = { "FMI: on your Watch list" } end
+  if it and A.at and now() - A.at > 6 * 3600 and not (out[1] and out[1][1] == "FMI AH now") then out[#out + 1] = { "FMI prices from " .. agoText(A.at) .. " (/reload after the app updates)" } end
+  return out
+end
+local function AddLines(tt, itemId, link)
+  for _, l in ipairs(TooltipLines(itemId, link)) do
+    if l[2] then tt:AddDoubleLine(l[1], l[2], 0.86, 0.62, 0.36, 1, 1, 1)
+    elseif l[1]:find("^FMI prices") then tt:AddLine(l[1], 0.55, 0.55, 0.55)
+    else tt:AddLine(l[1], 0.86, 0.62, 0.36) end
+  end
+end
+local hooked = false
+local function HookTooltips()
+  if hooked then return end
+  hooked = true
+  if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
+    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tt, data)
+      if tt ~= GameTooltip and tt ~= ItemRefTooltip then return end
+      local link
+      if tt.GetItem then local _, l = tt:GetItem(); link = l end
+      safe(AddLines, tt, (data and data.id) or itemIdOf(link), link)
+    end)
+  elseif GameTooltip and GameTooltip.HookScript then
+    for _, tt in ipairs({ GameTooltip, ItemRefTooltip }) do
+      if tt then tt:HookScript("OnTooltipSetItem", function(self) local _, link = self:GetItem(); safe(AddLines, self, itemIdOf(link), link) end) end
+    end
+  end
+end
+FMITracker.tooltipLines = TooltipLines
+FMITracker.live = function(itemId) return DB and DB.live and DB.live[itemId] end
+
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("MAIL_SHOW")
@@ -518,6 +652,8 @@ f:RegisterEvent("BANKFRAME_OPENED")
 f:RegisterEvent("BANKFRAME_CLOSED")
 f:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
 pcall(f.RegisterEvent, f, "BANK_TABS_CHANGED")       -- not on every client
+for _, e in ipairs({ "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED", "COMMODITY_SEARCH_RESULTS_UPDATED",
+                     "ITEM_SEARCH_RESULTS_UPDATED" }) do pcall(f.RegisterEvent, f, e) end   -- the modern auction house only
 
 f:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" then
@@ -526,6 +662,8 @@ f:SetScript("OnEvent", function(_, event, arg1)
     DB = FMITrackerDB
     DB.version, DB.log, DB.seen, DB.chars = VERSION, DB.log or {}, DB.seen or {}, DB.chars or {}
     DB.opt = DB.opt or { prompt = true }
+    DB.live = DB.live or {}
+    for _ in pairs(DB.live) do liveN = liveN + 1 end
     local t = now()
     DB.seenN = DB.seenN or {}
     for k, v in pairs(DB.seen) do if t - v > SEEN_DAYS * 86400 then DB.seen[k], DB.seenN[k] = nil, nil end end
@@ -542,6 +680,7 @@ f:SetScript("OnEvent", function(_, event, arg1)
     hook("TakeTaxiNode", "tx")
     if type(BuyTrainerService) == "function" then hooksecurefunc("BuyTrainerService", function() Expect(trainerKind()) end) end
     if C_Trainer and C_Trainer.BuyProvidedService then hooksecurefunc(C_Trainer, "BuyProvidedService", function() Expect(trainerKind()) end) end
+    safe(HookTooltips)
   elseif event == "MAIL_SHOW" or event == "MAIL_INBOX_UPDATE" then
     safe(ScanMail)
     safe(ScanMailItems)
@@ -577,6 +716,14 @@ f:SetScript("OnEvent", function(_, event, arg1)
     safe(ScheduleHoldings)
   elseif event == "PLAYER_MONEY" then
     safe(OnMoney)
+  elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
+    safe(ReadBrowse)
+  elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
+    safe(ReadBrowse, arg1)
+  elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
+    safe(ReadCommodity, arg1)
+  elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
+    safe(ReadItem, arg1)
   end
 end)
 
@@ -585,13 +732,26 @@ SlashCmdList["FMITRACKER"] = function(msg)
   if not DB then return end
   msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
   if msg == "save" then SaveNow(); return end
+  if msg == "tooltip off" or msg == "tooltip on" then
+    DB.opt.tooltip = (msg == "tooltip on")
+    print("|cff66ccffFMI Tracker|r: the tooltip lines are " .. (DB.opt.tooltip and "on" or "off") .. ".")
+    return
+  end
   if msg == "prompt off" or msg == "prompt on" then
     DB.opt.prompt = (msg == "prompt on")
     if not DB.opt.prompt then HidePrompt() end
     print("|cff66ccffFMI Tracker|r: the save reminder is " .. (DB.opt.prompt and "on" or "off") .. ".")
     return
   end
-  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save writes them now (reloads the interface); /fmit prompt off|on.")
+  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save writes them now (reloads the interface); /fmit prompt off|on; /fmit tooltip off|on.")
+  local A = FMITrackerAppData
+  if type(A) == "table" and A.items then
+    local n = 0
+    for _ in pairs(A.items) do n = n + 1 end
+    print("  App data: " .. tostring(A.house or "?") .. " " .. tostring(A.region or "") .. ", " .. n .. " items, prices " .. agoText(A.at or 0) .. ".")
+  else
+    print("  No app data yet: start the Market Intelligence app, then /reload (the addon FMITracker_Data must be enabled).")
+  end
   local n = #DB.log
   print("|cff66ccffFMI Tracker " .. VERSION .. "|r: " .. n .. " entries (written to the file on /reload or logout). Mails looked at: " .. stats.mails .. ", auction invoices found: " .. stats.invoices .. ".")
   for i = math.max(1, n - 4), n do print("  " .. DB.log[i]) end

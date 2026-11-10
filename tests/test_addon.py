@@ -180,7 +180,11 @@ class Addon(unittest.TestCase):
     def shown(self):
         return bool(self.lua.eval('FMITracker.promptShown()'))
 
+    def popup(self):
+        self.lua.execute('SlashCmdList["FMITRACKER"]("reminder popup")')
+
     def test_closing_the_mailbox_with_new_entries_offers_a_save_and_the_button_reloads(self):
+        self.popup()
         self.g.fire('MAIL_SHOW')
         self.g.fire('MAIL_CLOSED')
         self.assertFalse(self.shown())                                  # nothing new: no plate
@@ -192,6 +196,7 @@ class Addon(unittest.TestCase):
         self.assertEqual(self.lua.eval('_reloads'), 1)
 
     def test_never_in_combat_or_an_instance_it_comes_back_after(self):
+        self.popup()
         self.lua.execute('_combat = true')
         self.sale()
         self.g.fire('MAIL_CLOSED')
@@ -199,7 +204,7 @@ class Addon(unittest.TestCase):
         self.lua.execute('_combat = false')
         self.g.fire('PLAYER_REGEN_ENABLED')
         self.assertTrue(self.shown())
-        self.lua.execute('FMITracker.later(); _instance = true')
+        self.lua.execute('FMITracker.later(); _instance = true; _t = _t + 1801')
         self.lua.execute('_bags = {[2770]=30}')
         self.g.fire('MERCHANT_SHOW')
         self.lua.execute('_bags = {[2770]=10}')
@@ -211,6 +216,7 @@ class Addon(unittest.TestCase):
         self.assertTrue(self.shown())
 
     def test_later_waits_for_something_new_and_the_reminder_can_be_switched_off(self):
+        self.popup()
         self.sale()
         self.g.fire('MAIL_CLOSED')
         self.lua.execute('FMITracker.later()')
@@ -222,7 +228,7 @@ class Addon(unittest.TestCase):
         self.g.fire('MAIL_SHOW')
         self.g.fire('MAIL_CLOSED')
         self.assertFalse(self.shown())
-        self.assertFalse(self.lua.eval('FMITrackerDB.opt.prompt'))
+        self.assertEqual(self.lua.eval('FMITrackerDB.opt.save'), 'off')
         self.lua.execute('SlashCmdList["FMITRACKER"]("save")')
         self.assertEqual(self.lua.eval('_reloads'), 1)
 
@@ -311,6 +317,49 @@ class Addon(unittest.TestCase):
         self.assertEqual(self.live(2770), (120, 5, 3000000))
         self.lua.execute('FMITrackerAppData = nil; _t = 3000000 + 7 * 3600')
         self.assertEqual(self.lines(2770), [])                                # older than 6 h: not shown as "now"
+
+    # ------------------------------------------------------------ quiet saving (0.7.0)
+    def btn(self):
+        return bool(self.lua.eval('FMITracker.buttonShown()'))
+
+    def test_by_default_a_button_under_the_open_window_and_no_plate(self):
+        self.assertEqual(self.lua.eval('FMITrackerDB.opt.save'), 'button')
+        self.g.fire('MAIL_SHOW')
+        self.assertFalse(self.btn())                                    # nothing unsaved yet
+        self.sale()
+        self.assertTrue(self.btn())
+        self.g.fire('MAIL_CLOSED')
+        self.assertFalse(self.btn())
+        self.assertFalse(self.shown())                                  # no plate pops up
+        self.lua.execute('_bags = {[2770]=30}')
+        self.g.fire('MERCHANT_SHOW')
+        self.assertTrue(self.btn())                                     # the mail entry is still unsaved
+        self.g.fire('MERCHANT_CLOSED')
+        self.assertFalse(self.btn())
+
+    def test_the_popup_after_later_waits_30_minutes_and_off_shows_nothing(self):
+        self.popup()
+        self.sale()
+        self.g.fire('MAIL_CLOSED')
+        self.assertTrue(self.shown())
+        self.lua.execute('FMITracker.later()')
+        self.lua.execute('_mail[2] = {sender="AH", subject="s2", money=500, daysLeft=29.4, invoice={type="seller",name="Copper Ore",player="C",bid=600,buyout=600,deposit=10,cut=30,count=1}}')
+        self.g.fire('MAIL_SHOW')
+        self.g.fire('MAIL_CLOSED')
+        self.assertFalse(self.shown())                                  # something new, but within 30 min
+        self.lua.execute('_t = _t + 1801')
+        self.g.fire('MAIL_SHOW')
+        self.g.fire('MAIL_CLOSED')
+        self.assertTrue(self.shown())
+        self.lua.execute('SlashCmdList["FMITRACKER"]("reminder off")')
+        self.assertFalse(self.shown())
+        self.g.fire('MAIL_SHOW')
+        self.assertFalse(self.btn())
+
+    def test_an_old_switch_off_stays_off(self):
+        self.lua.execute('FMITrackerDB.opt = {prompt = false}; FMITrackerDB.opt.save = nil')
+        self.g.fire('ADDON_LOADED', 'FMITracker')
+        self.assertEqual(self.lua.eval('FMITrackerDB.opt.save'), 'off')
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
--- FMI Tracker 0.6.0
+-- FMI Tracker 0.7.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -20,8 +20,10 @@
 -- and adds market price, demand, your last sale / purchase and the Watch mark to item tooltips. /fmit tooltip off|on.
 -- 0.6.0: remembers the auction prices the game shows you while the auction house is open (search results and an item's
 -- lots; it never searches by itself) and puts them in the tooltip at once: "FMI AH now", no /reload needed.
+-- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
+-- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -56,8 +58,10 @@ local function trim()
 end
 
 local newN = 0                 -- entries logged since the game last wrote the file (this session)
+local afterLog                 -- set below: refreshes the save button
 local function Log(kind, itemId, name, qty, a, b, c)
   newN = newN + 1
+  if afterLog then afterLog() end
   local log = DB.log
   log[#log + 1] = table.concat({
     now(), kind, itemId or 0, clean(name), qty or 0, math.floor(a or 0), math.floor(b or 0), math.floor(c or 0), char }, "|")
@@ -474,14 +478,16 @@ local function SavePrompt()
   later:SetSize(80, 22)
   later:SetPoint("LEFT", save, "RIGHT", 8, 0)
   later:SetText("Later")
-  later:SetScript("OnClick", function() snoozedAt = newN; HidePrompt() end)
+  later:SetScript("OnClick", function() FMITracker.later() end)
   p:Hide()
   prompt = p
   return p
 end
+local snoozeUntil = 0
+local function saveMode() return (DB and DB.opt and DB.opt.save) or "button" end
 local function OfferSave()
-  if not DB or (DB.opt and DB.opt.prompt == false) then return end
-  if newN < 1 or newN <= snoozedAt then return end
+  if not DB or saveMode() ~= "popup" then return end
+  if newN < 1 or newN <= snoozedAt or now() < snoozeUntil then return end
   if quietPlace() then pending = true; return end
   pending = false
   local p = SavePrompt()
@@ -493,8 +499,42 @@ local function OfferSave()
   if C_Timer and C_Timer.After then C_Timer.After(45, function() if promptShown and newN == shownAt then HidePrompt() end end) end
 end
 -- for other addons and the tests: how many entries wait for the next write, and whether the plate is up
+-- The quiet way (default): a small button under the mailbox or the merchant window, only while one is open and
+-- something is unsaved. Nothing pops up.
+local saveBtn, btnShown, openHost = nil, false, nil
+local function UpdateSaveButton()
+  local host = (openHost == "mail" and MailFrame) or (openHost == "merchant" and MerchantFrame) or nil
+  if host and host.IsShown and host:IsShown() == false then openHost, host = nil, nil end   -- the window is gone
+  local want = DB and saveMode() == "button" and openHost and newN > 0
+  if not want then
+    if saveBtn then saveBtn:Hide() end
+    btnShown = false
+    return
+  end
+  if not saveBtn then
+    saveBtn = CreateFrame("Button", "FMITrackerSaveButton", UIParent, "UIPanelButtonTemplate")
+    saveBtn:SetSize(176, 22)
+    saveBtn:SetFrameStrata("HIGH")
+    saveBtn:SetScript("OnClick", SaveNow)
+    saveBtn:SetScript("OnEnter", function(self)
+      if not GameTooltip then return end
+      GameTooltip:SetOwner(self, "ANCHOR_TOP")
+      GameTooltip:AddLine("FMI Tracker")
+      GameTooltip:AddLine("Writes the new entries for the Market Intelligence app now. The game writes them only on a reload or logout, so this reloads the interface (a few seconds). Logging out saves them too.", 1, 1, 1, true)
+      GameTooltip:Show()
+    end)
+    saveBtn:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  end
+  saveBtn:ClearAllPoints()
+  if host then saveBtn:SetPoint("TOPRIGHT", host, "BOTTOMRIGHT", 0, -2) else saveBtn:SetPoint("TOP", UIParent, "TOP", 0, -110) end
+  saveBtn:SetText(("Save for the app (%d)"):format(newN))
+  saveBtn:Show()
+  btnShown = true
+end
+afterLog = function() if openHost then UpdateSaveButton() end end
+local function later() snoozedAt = newN; snoozeUntil = now() + 1800; HidePrompt() end
 FMITracker = { version = VERSION, unsaved = function() return newN end, promptShown = function() return promptShown end,
-               offer = OfferSave, save = SaveNow, later = function() snoozedAt = newN; HidePrompt() end }
+               buttonShown = function() return btnShown end, offer = OfferSave, save = SaveNow, later = later }
 
 -- ---------------------------------------------------------------- events
 local warned = false
@@ -661,7 +701,8 @@ f:SetScript("OnEvent", function(_, event, arg1)
     FMITrackerDB = FMITrackerDB or {}
     DB = FMITrackerDB
     DB.version, DB.log, DB.seen, DB.chars = VERSION, DB.log or {}, DB.seen or {}, DB.chars or {}
-    DB.opt = DB.opt or { prompt = true }
+    DB.opt = DB.opt or {}
+    if DB.opt.save == nil then DB.opt.save = (DB.opt.prompt == false) and "off" or "button" end   -- 0.7.0: quiet by default
     DB.live = DB.live or {}
     for _ in pairs(DB.live) do liveN = liveN + 1 end
     local t = now()
@@ -682,9 +723,13 @@ f:SetScript("OnEvent", function(_, event, arg1)
     if C_Trainer and C_Trainer.BuyProvidedService then hooksecurefunc(C_Trainer, "BuyProvidedService", function() Expect(trainerKind()) end) end
     safe(HookTooltips)
   elseif event == "MAIL_SHOW" or event == "MAIL_INBOX_UPDATE" then
+    openHost = "mail"
     safe(ScanMail)
     safe(ScanMailItems)
+    safe(UpdateSaveButton)
   elseif event == "MAIL_CLOSED" then
+    openHost = nil
+    safe(UpdateSaveButton)
     safe(OfferSave)
   elseif event == "PLAYER_REGEN_ENABLED" then
     if pending then safe(OfferSave) end
@@ -705,11 +750,15 @@ f:SetScript("OnEvent", function(_, event, arg1)
     bankOpen = false                                   -- the last reading taken while it was open stands
   elseif event == "MERCHANT_SHOW" then
     merchant = { bags = bagCounts(), money = GetMoney() }
+    openHost = "merchant"
+    safe(UpdateSaveButton)
     Dbg("merchant opened")
   elseif event == "MERCHANT_CLOSED" then
     safe(CheckMerchant)
     Dbg("merchant closed")
     merchant = nil
+    openHost = nil
+    safe(UpdateSaveButton)
     safe(OfferSave)
   elseif event == "BAG_UPDATE_DELAYED" then
     if merchant then safe(CheckMerchant) end
@@ -737,13 +786,15 @@ SlashCmdList["FMITRACKER"] = function(msg)
     print("|cff66ccffFMI Tracker|r: the tooltip lines are " .. (DB.opt.tooltip and "on" or "off") .. ".")
     return
   end
-  if msg == "prompt off" or msg == "prompt on" then
-    DB.opt.prompt = (msg == "prompt on")
-    if not DB.opt.prompt then HidePrompt() end
-    print("|cff66ccffFMI Tracker|r: the save reminder is " .. (DB.opt.prompt and "on" or "off") .. ".")
+  local m = msg:match("^reminder (%a+)$") or ({ ["prompt off"] = "off", ["prompt on"] = "popup" })[msg]
+  if m == "button" or m == "popup" or m == "off" then
+    DB.opt.save = m
+    if m ~= "popup" then HidePrompt() end
+    safe(UpdateSaveButton)
+    print("|cff66ccffFMI Tracker|r: save reminder: " .. ({ button = "a button under the mailbox and merchant windows", popup = "a plate after the mailbox or a merchant (at most every 30 min)", off = "off (logout and /fmit save still save)" })[m] .. ".")
     return
   end
-  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save writes them now (reloads the interface); /fmit prompt off|on; /fmit tooltip off|on.")
+  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save writes them now (reloads the interface); /fmit reminder button|popup|off; /fmit tooltip off|on.")
   local A = FMITrackerAppData
   if type(A) == "table" and A.items then
     local n = 0

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.0 (10 Nov 2026)
+- **Quieter saving:** the plate no longer pops up by default. Instead a small **Save for the app (N)** button sits under the mailbox or the merchant window, only while one of them is open and something is unsaved; its tooltip says what it does. Logging out still saves everything.
+- `/fmit reminder button` (default), `/fmit reminder popup` (the plate, now at most once per 30 minutes after "Later"), `/fmit reminder off`. The old `/fmit prompt off|on` still works. Whoever switched the plate off in 0.4.0 stays off.
+- Tests: 3 new (button by default, popup snooze and off, an old switch-off kept).
+
 ## 0.6.0 (10 Nov 2026)
 - **Live auction prices, no /reload:** while the auction house is open, FMI Tracker keeps what the game already shows you: the browse / search list (lowest price, quantity listed), the lots of a commodity and the lots of one item (lowest buyout per unit, bid-only lots left out). The tooltip shows it at once as **FMI AH now: price · N min ago · N listed**, above the app's lines, when it is newer than the app data and under 6 h old. It never sends a search itself.
 - Kept in `FMITrackerDB.live[itemId] = {copper per unit, quantity, time}` (the newest 3000 items), so it survives a reload. Variants (suffix, pet species) are not kept.

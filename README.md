@@ -21,7 +21,7 @@ It does not buy, sell, post, cancel, open or take mail, and it does not scan the
 ## Install
 Copy the `FMITracker` folder into `World of Warcraft/_retail_/Interface/AddOns/` (or `_forever_`). Enable it on the character select screen. In the game `/fmit` shows how many entries are recorded.
 
-The game writes the file only on `/reload`, logout or exit; that is a client rule, not a choice of the addon. So after you close a mailbox or a merchant with something new recorded, a small plate offers **Save for the app**: one click reloads the interface and the app sees the entries within seconds. It never shows in combat or in an instance, **Later** waits until there is something new again, `/fmit save` does the same from the chat, and `/fmit prompt off` switches the plate off.
+The game writes the file only on `/reload`, logout or exit; that is a client rule, not a choice of the addon. So while a mailbox or a merchant window is open and something is unsaved, a small **Save for the app (N)** button sits under the window: one click reloads the interface and the app sees the entries within seconds. Nothing pops up; logging out saves everything anyway. `/fmit save` does the same from the chat; `/fmit reminder popup` brings back a plate after the mailbox or a merchant (at most every 30 minutes), `/fmit reminder off` hides both.
 
 
 ## Prices in the game (with the Market Intelligence app)

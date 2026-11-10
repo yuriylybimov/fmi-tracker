@@ -239,8 +239,16 @@ class Addon(unittest.TestCase):
 
     # ------------------------------------------------------------ tooltip lines from the app (0.5.0)
     def lines(self, item_id, link=None):
+        """The FMI block as plain tuples: coin icons read as g/s/c, colour codes dropped, the line kind left out."""
+        import re
+        def plain(v):
+            v = re.sub(r'\|TInterface\\MoneyFrame\\UI-(Gold|Silver|Copper)Icon[^|]*\|t', lambda m: m.group(1)[0].lower(), v)
+            return re.sub(r'\|c[0-9a-fA-F]{8}|\|r', '', v)
         t = self.lua.eval('FMITracker.tooltipLines')(item_id, link)
-        return [tuple(v for v in (l[1], l[2]) if v is not None) for l in t.values()]
+        return [tuple(plain(v) for v in (l[1], l[2]) if v is not None) for l in t.values()]
+
+    def kind(self, item_id):
+        return self.lua.eval('FMITracker.tooltipLines')(item_id, None)[1][3]
 
     def app_data(self, at_offset=0):
         self.lua.execute('_t = 2000000; FMITrackerAppData = {["v"] = 1, ["house"] = "Horde #113", ["region"] = "EU", ["at"] = %d, '
@@ -249,20 +257,27 @@ class Addon(unittest.TestCase):
 
     def test_market_lowest_demand_own_trades_and_the_watch_mark(self):
         self.app_data()
-        self.assertEqual(self.lines(2770), [('FMI market', '1g 25s 50c'), ('  lowest lot', '1g 10s 0c'), ('FMI demand', 'sells fast · ~42/day'),
-                                            ('FMI your last sale', '1g 19s 0c · 2 h ago'), ('FMI: on your Watch list',)])
-        self.assertEqual(self.lines(2589), [('FMI market', '50c'), ('FMI demand', 'not selling'), ('FMI your last buy', '45c · 10 min ago')])
+        self.assertEqual(self.lines(2770), [('FMI · Horde #113', 'scan 1 min ago'), ('  Market', '1g 25s 50c'), ('  Lowest lot', '1g 10s'),
+                                            ('  Listed', '300'), ('  Demand', 'sells fast · ~42/day'), ('  Your last sale', '1g 19s · 2 h ago'),
+                                            ('  On your Watch list',)])
+        self.assertEqual(self.lines(2589), [('FMI · Horde #113', 'scan 1 min ago'), ('  Market', '50c'), ('  Listed', '12'), ('  Demand', 'not selling'),
+                                            ('  Your last buy', '45c · 10 min ago')])
         self.assertEqual(self.lines(999), [])
+        self.lua.execute('FMITrackerAppData["items"][2770][6] = -6; FMITrackerAppData["items"][2589][6] = 1')
+        self.assertIn(('  24h', '-6%'), self.lines(2770))
+        self.assertIn(('  24h', '+1%'), self.lines(2589))
 
     def test_a_variant_gets_no_price_of_the_plain_item(self):
         self.app_data()
         got = self.lines(2770, '|cffffffff|Hitem:2770::::::1234:::::|h[Copper Ore]|h|r')
-        self.assertNotIn('FMI market', [l[0] for l in got])
-        self.assertIn(('FMI: on your Watch list',), got)
+        self.assertNotIn('  Market', [l[0] for l in got])
+        self.assertEqual(got[0], ('FMI · Horde #113',))                     # no scan age without a price
+        self.assertIn(('  On your Watch list',), got)
 
     def test_old_prices_say_so_and_the_lines_can_be_switched_off(self):
         self.app_data(at_offset=8 * 3600)
-        self.assertEqual(self.lines(2770)[-1], ('FMI prices from 8 h ago (/reload after the app updates)',))
+        self.assertEqual(self.lines(2770)[0], ('FMI · Horde #113', 'scan 8 h ago'))
+        self.assertEqual(self.kind(2770), 'stale')
         self.lua.execute('SlashCmdList["FMITRACKER"]("tooltip off")')
         self.assertEqual(self.lines(2770), [])
 
@@ -302,12 +317,12 @@ class Addon(unittest.TestCase):
         self.lua.execute('FMITrackerAppData = nil; _t = 3000000; _browse = {{itemKey = {itemID = 2770, itemSuffix = 0, battlePetSpeciesID = 0}, minPrice = 12550, totalQuantity = 340}}')
         self.g.fire('AUCTION_HOUSE_BROWSE_RESULTS_UPDATED')
         self.lua.execute('_t = 3000120')
-        self.assertEqual(self.lines(2770), [('FMI AH now', '1g 25s 50c · 2 min ago · 340 listed')])
+        self.assertEqual(self.lines(2770), [('FMI',), ('  AH now', '1g 25s 50c · 2 min ago · 340 listed')])
         self.app_data()                                                       # older app data: the live line leads
         self.lua.execute('_t = 3000120')
-        self.assertEqual(self.lines(2770)[0], ('FMI AH now', '1g 25s 50c · 2 min ago · 340 listed'))
+        self.assertEqual(self.lines(2770)[1], ('  AH now', '1g 25s 50c · 2 min ago · 340 listed'))
         self.lua.execute('FMITrackerAppData["at"] = 3000100')                 # app data newer than the live reading: no live line
-        self.assertNotIn('FMI AH now', [l[0] for l in self.lines(2770)])
+        self.assertNotIn('  AH now', [l[0] for l in self.lines(2770)])
 
     def test_live_prices_survive_a_reload_and_old_ones_hide(self):
         self.lua.execute(self.AH)

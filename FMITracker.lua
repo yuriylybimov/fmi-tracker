@@ -1,4 +1,4 @@
--- FMI Tracker 0.7.0
+-- FMI Tracker 0.8.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.7.0"
+local VERSION = "0.8.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -605,14 +605,16 @@ end
 -- FMITrackerAppData comes from the addon FMITracker_Data that the Market Intelligence app writes into the AddOns folder
 -- (read by the game at login or /reload). items[id] = {market, min, units, tier, perDay}; sold/bought[id] = {unit, ts}.
 local TIER = { [3] = "sells fast", [2] = "sells steadily", [1] = "sells slowly", [0] = "not selling" }
+-- Money with the game's coin icons (GetCoinTextureString does not exist on every client): 2s 9c, 1g 10s; zero units left out.
+local ICON = { g = "|TInterface\\MoneyFrame\\UI-GoldIcon:0:0:2:0|t", s = "|TInterface\\MoneyFrame\\UI-SilverIcon:0:0:2:0|t",
+               c = "|TInterface\\MoneyFrame\\UI-CopperIcon:0:0:2:0|t" }
 local function coins(c)
-  c = math.floor(tonumber(c) or 0)
-  if GetCoinTextureString then return GetCoinTextureString(c) end
+  c = math.floor((tonumber(c) or 0) + 0.5)
   local g, si, co = math.floor(c / 10000), math.floor(c / 100) % 100, c % 100
   local out = {}
-  if g > 0 then out[#out + 1] = g .. "g" end
-  if g > 0 or si > 0 then out[#out + 1] = si .. "s" end
-  out[#out + 1] = co .. "c"
+  if g > 0 then out[#out + 1] = g .. ICON.g end
+  if si > 0 then out[#out + 1] = si .. ICON.s end
+  if co > 0 or #out == 0 then out[#out + 1] = co .. ICON.c end
   return table.concat(out, " ")
 end
 local function agoText(ts)
@@ -621,38 +623,54 @@ local function agoText(ts)
   if d < 172800 then return math.floor(d / 3600) .. " h ago" end
   return math.floor(d / 86400) .. " d ago"
 end
--- The lines for one item: a list of {left, right} (right may be nil). A variant (bonus ids, enchant, suffix) gets no
--- price of the plain item.
+local function pct(v)
+  v = tonumber(v)
+  if not v then return nil end
+  local t = (v > 0 and "+" or "") .. v .. "%"
+  if v >= 3 then return "|cff4fd27a" .. t .. "|r" end
+  if v <= -3 then return "|cfff07a6a" .. t .. "|r" end
+  return t
+end
+-- The FMI block of one item: a list of {left, right, kind}. The first line is the header "FMI · <house>" with the age of
+-- the app's scan (kind "head", or "stale" when older than 6 h). A variant (bonus ids, enchant, suffix) gets no price of
+-- the plain item. Nothing at all when there is nothing to say.
 local function TooltipLines(itemId, link)
   if not itemId then return {} end
   if DB and DB.opt and DB.opt.tooltip == false then return {} end
   local A = type(FMITrackerAppData) == "table" and FMITrackerAppData or {}
-  local out = {}
   local variant = isVariant(link)
-  local lv = (not variant) and DB and DB.live and DB.live[itemId]
-  if lv and now() - lv[3] < 6 * 3600 and (not A.at or lv[3] >= A.at) then
-    out[#out + 1] = { "FMI AH now", coins(lv[1]) .. " · " .. agoText(lv[3]) .. ((lv[2] or 0) > 0 and (" · " .. lv[2] .. " listed") or "") }
-  end
   local it = (not variant) and A.items and A.items[itemId]
+  local lv = (not variant) and DB and DB.live and DB.live[itemId]
+  if lv and not (now() - lv[3] < 6 * 3600 and (not A.at or lv[3] >= A.at)) then lv = nil end
+  local s, b, w = A.sold and A.sold[itemId], A.bought and A.bought[itemId], A.watch and A.watch[itemId]
+  if not (it or lv or s or b or w) then return {} end
+  local out = {}
+  local stale = it and A.at and now() - A.at > 6 * 3600
+  out[1] = { "FMI" .. (A.house and (" · " .. A.house) or ""), (it and A.at) and ("scan " .. agoText(A.at)) or nil, stale and "stale" or "head" }
+  if lv then
+    out[#out + 1] = { "  AH now", coins(lv[1]) .. " · " .. agoText(lv[3]) .. ((lv[2] or 0) > 0 and (" · " .. lv[2] .. " listed") or "") }
+  end
   if it then
-    local market, min, tier, perDay = it[1], it[2], it[4], it[5]
-    if market or min then out[#out + 1] = { "FMI market", coins(market or min) } end
-    if market and min and min < market * 0.9 then out[#out + 1] = { "  lowest lot", coins(min) } end
+    local market, min, units, tier, perDay, change = it[1], it[2], it[3], it[4], it[5], it[6]
+    if market or min then out[#out + 1] = { "  Market", coins(market or min) } end
+    if market and min and min < market * 0.9 then out[#out + 1] = { "  Lowest lot", coins(min) } end
+    if units and units > 0 then out[#out + 1] = { "  Listed", tostring(units) } end
+    if change then out[#out + 1] = { "  24h", pct(change) } end
     if tier and TIER[tier] then
-      out[#out + 1] = { "FMI demand", TIER[tier] .. ((perDay and perDay > 0) and (" · ~" .. math.floor(perDay + 0.5) .. "/day") or "") }
+      out[#out + 1] = { "  Demand", TIER[tier] .. ((perDay and perDay > 0) and (" · ~" .. math.floor(perDay + 0.5) .. "/day") or "") }
     end
   end
-  local s, b = A.sold and A.sold[itemId], A.bought and A.bought[itemId]
-  if s then out[#out + 1] = { "FMI your last sale", coins(s[1]) .. " · " .. agoText(s[2]) } end
-  if b then out[#out + 1] = { "FMI your last buy", coins(b[1]) .. " · " .. agoText(b[2]) } end
-  if A.watch and A.watch[itemId] then out[#out + 1] = { "FMI: on your Watch list" } end
-  if it and A.at and now() - A.at > 6 * 3600 and not (out[1] and out[1][1] == "FMI AH now") then out[#out + 1] = { "FMI prices from " .. agoText(A.at) .. " (/reload after the app updates)" } end
+  if s then out[#out + 1] = { "  Your last sale", coins(s[1]) .. " · " .. agoText(s[2]) } end
+  if b then out[#out + 1] = { "  Your last buy", coins(b[1]) .. " · " .. agoText(b[2]) } end
+  if w then out[#out + 1] = { "  On your Watch list" } end
   return out
 end
 local function AddLines(tt, itemId, link)
   for _, l in ipairs(TooltipLines(itemId, link)) do
-    if l[2] then tt:AddDoubleLine(l[1], l[2], 0.86, 0.62, 0.36, 1, 1, 1)
-    elseif l[1]:find("^FMI prices") then tt:AddLine(l[1], 0.55, 0.55, 0.55)
+    if l[3] == "head" or l[3] == "stale" then
+      local o = l[3] == "stale"
+      tt:AddDoubleLine(l[1], l[2] or " ", 0.86, 0.62, 0.36, o and 1 or 0.6, o and 0.6 or 0.6, o and 0.25 or 0.6)
+    elseif l[2] then tt:AddDoubleLine(l[1], l[2], 0.78, 0.78, 0.78, 1, 1, 1)
     else tt:AddLine(l[1], 0.86, 0.62, 0.36) end
   end
 end

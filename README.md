@@ -25,7 +25,7 @@ The game writes the file only on `/reload`, logout or exit; that is a client rul
 
 
 ## Prices in the game (with the Market Intelligence app)
-The app writes a small addon, `FMITracker_Data`, into `Interface/AddOns` of each game client it knows, and refreshes it every 10 minutes when something changed. The game reads it at login or `/reload`. FMI Tracker then adds lines to item tooltips: market price (and the lowest lot when it is much cheaper), demand (how fast it sells, about how many a day), your last sale and purchase, and whether the item is on your Watch list. `/fmit tooltip off` hides them. Enable "FMI Tracker Data" on the character select screen once.
+The app writes a small addon, `FMITracker_Data`, into `Interface/AddOns` of each game client it knows, and refreshes it every 10 minutes when something changed. The game reads it at login or `/reload`. FMI Tracker then adds one block to item tooltips: a header with your auction house and the age of the scan, then market price (and the lowest lot when it is much cheaper), units listed, the change over 24 hours, demand (how fast it sells, about how many a day), your last sale and purchase, and whether the item is on your Watch list. `/fmit tooltip off` hides them. Enable "FMI Tracker Data" on the character select screen once.
 
 While the auction house is open, FMI Tracker also remembers what the game shows you there (the search list and the lots of an item) and puts it in the tooltip at once as **FMI AH now**, without a reload. It never searches by itself.
 

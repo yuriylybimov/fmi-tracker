@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0 (10 Nov 2026)
+- **One FMI block in the tooltip** with a header **FMI · <auction house>** and the age of the app's scan on the right ("scan 40 min ago"; orange when older than 6 h). Under it, indented: AH now (live, when newer), Market, Lowest lot (when more than 10% under), Listed (units on the AH), 24h (the market price against the app's snapshot a day before, green / red from 3%), Demand, Your last sale / buy, On your Watch list.
+- Money with the game's coin icons (the client of WoW Forever has no `GetCoinTextureString`, so 0.5.0 showed "2s 9c"); zero units left out (1g 10s, not 1g 10s 0c).
+- The separate "prices from N h ago" line is gone: the header says it.
+
 ## 0.7.0 (10 Nov 2026)
 - **Quieter saving:** the plate no longer pops up by default. Instead a small **Save for the app (N)** button sits under the mailbox or the merchant window, only while one of them is open and something is unsaved; its tooltip says what it does. Logging out still saves everything.
 - `/fmit reminder button` (default), `/fmit reminder popup` (the plate, now at most once per 30 minutes after "Later"), `/fmit reminder off`. The old `/fmit prompt off|on` still works. Whoever switched the plate off in 0.4.0 stays off.

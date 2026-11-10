@@ -21,7 +21,7 @@ It does not buy, sell, post, cancel, open or take mail, and it does not scan the
 ## Install
 Copy the `FMITracker` folder into `World of Warcraft/_retail_/Interface/AddOns/` (or `_forever_`). Enable it on the character select screen. In the game `/fmit` shows how many entries are recorded.
 
-The game writes the file only on `/reload`, logout or exit; that is a client rule, not a choice of the addon.
+The game writes the file only on `/reload`, logout or exit; that is a client rule, not a choice of the addon. So after you close a mailbox or a merchant with something new recorded, a small plate offers **Save for the app**: one click reloads the interface and the app sees the entries within seconds. It never shows in combat or in an instance, **Later** waits until there is something new again, `/fmit save` does the same from the chat, and `/fmit prompt off` switches the plate off.
 
 ## Size
 About 60 bytes per log line; the last 20,000 lines are kept (about 1.2 MB). Holdings are a few kilobytes per character.

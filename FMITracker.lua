@@ -1,4 +1,4 @@
--- FMI Tracker 0.3.0
+-- FMI Tracker 0.4.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -14,8 +14,10 @@
 --   vs: a = copper received (all units)   vb: a = copper paid (all units)
 --   rp / tx / tr / tp: a = copper paid (tr before 0.3.0 is any trainer)
 -- The file is written by the game on /reload or logout. Money is in copper, time is server time (UTC epoch).
+-- 0.4.0: after a mailbox or a merchant closes with new entries, a small plate offers to save them for the app; its button
+-- reloads the interface (the only way the game writes the file). Never in combat or in an instance. /fmit save, /fmit prompt.
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -49,7 +51,9 @@ local function trim()
   DB.log = keep
 end
 
+local newN = 0                 -- entries logged since the game last wrote the file (this session)
 local function Log(kind, itemId, name, qty, a, b, c)
+  newN = newN + 1
   local log = DB.log
   log[#log + 1] = table.concat({
     now(), kind, itemId or 0, clean(name), qty or 0, math.floor(a or 0), math.floor(b or 0), math.floor(c or 0), char }, "|")
@@ -425,6 +429,69 @@ local function hook(name, kind)
   return false
 end
 
+-- ---------------------------------------------------------------- saving for the app
+-- The game writes FMITracker.lua only on /reload, logout or exit; an addon cannot write it in any other way. So after a
+-- mailbox or a merchant closes with new entries, a small plate offers a one-click save: its button calls ReloadUI() (a
+-- click is the player's own action). Never in combat or in an instance (it waits and comes back after); "Later" waits
+-- until there is something new again; the plate hides by itself after 45 s. /fmit prompt off switches it off.
+local prompt, promptShown, snoozedAt, pending = nil, false, 0, false
+local function quietPlace()
+  if InCombatLockdown and InCombatLockdown() then return true end
+  if IsInInstance then local inside = IsInInstance(); if inside then return true end end
+  return false
+end
+local function HidePrompt()
+  promptShown = false
+  if prompt then prompt:Hide() end
+end
+local function SaveNow() ReloadUI() end
+local function SavePrompt()
+  if prompt then return prompt end
+  local p = CreateFrame("Frame", "FMITrackerSavePrompt", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+  p:SetSize(320, 78)
+  p:SetPoint("TOP", UIParent, "TOP", 0, -110)
+  p:SetFrameStrata("DIALOG")
+  if p.SetBackdrop then
+    p:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                    tile = true, tileSize = 16, edgeSize = 14, insets = { left = 4, right = 4, top = 4, bottom = 4 } })
+    p:SetBackdropColor(0.06, 0.05, 0.04, 0.95)
+    p:SetBackdropBorderColor(0.80, 0.50, 0.20, 0.9)
+  end
+  p.text = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  p.text:SetPoint("TOPLEFT", 12, -10)
+  p.text:SetPoint("TOPRIGHT", -12, -10)
+  p.text:SetJustifyH("LEFT")
+  local save = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+  save:SetSize(150, 22)
+  save:SetPoint("BOTTOMLEFT", 12, 10)
+  save:SetText("Save for the app")
+  save:SetScript("OnClick", SaveNow)
+  local later = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+  later:SetSize(80, 22)
+  later:SetPoint("LEFT", save, "RIGHT", 8, 0)
+  later:SetText("Later")
+  later:SetScript("OnClick", function() snoozedAt = newN; HidePrompt() end)
+  p:Hide()
+  prompt = p
+  return p
+end
+local function OfferSave()
+  if not DB or (DB.opt and DB.opt.prompt == false) then return end
+  if newN < 1 or newN <= snoozedAt then return end
+  if quietPlace() then pending = true; return end
+  pending = false
+  local p = SavePrompt()
+  p.text:SetText(("|cff66ccffFMI Tracker|r: %d new %s not saved for the app yet. Saving reloads the interface (a few seconds).")
+    :format(newN, newN == 1 and "entry" or "entries"))
+  p:Show()
+  promptShown = true
+  local shownAt = newN
+  if C_Timer and C_Timer.After then C_Timer.After(45, function() if promptShown and newN == shownAt then HidePrompt() end end) end
+end
+-- for other addons and the tests: how many entries wait for the next write, and whether the plate is up
+FMITracker = { version = VERSION, unsaved = function() return newN end, promptShown = function() return promptShown end,
+               offer = OfferSave, save = SaveNow, later = function() snoozedAt = newN; HidePrompt() end }
+
 -- ---------------------------------------------------------------- events
 local warned = false
 local function safe(fn, ...)
@@ -439,6 +506,8 @@ f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("MAIL_SHOW")
 f:RegisterEvent("MAIL_INBOX_UPDATE")
+f:RegisterEvent("MAIL_CLOSED")
+f:RegisterEvent("PLAYER_REGEN_ENABLED")
 f:RegisterEvent("MERCHANT_SHOW")
 f:RegisterEvent("MERCHANT_CLOSED")
 f:RegisterEvent("BAG_UPDATE_DELAYED")
@@ -456,6 +525,7 @@ f:SetScript("OnEvent", function(_, event, arg1)
     FMITrackerDB = FMITrackerDB or {}
     DB = FMITrackerDB
     DB.version, DB.log, DB.seen, DB.chars = VERSION, DB.log or {}, DB.seen or {}, DB.chars or {}
+    DB.opt = DB.opt or { prompt = true }
     local t = now()
     DB.seenN = DB.seenN or {}
     for k, v in pairs(DB.seen) do if t - v > SEEN_DAYS * 86400 then DB.seen[k], DB.seenN[k] = nil, nil end end
@@ -475,11 +545,17 @@ f:SetScript("OnEvent", function(_, event, arg1)
   elseif event == "MAIL_SHOW" or event == "MAIL_INBOX_UPDATE" then
     safe(ScanMail)
     safe(ScanMailItems)
+  elseif event == "MAIL_CLOSED" then
+    safe(OfferSave)
+  elseif event == "PLAYER_REGEN_ENABLED" then
+    if pending then safe(OfferSave) end
   elseif event == "PLAYER_ENTERING_WORLD" then
     safe(ScheduleHoldings)
+    if pending then safe(OfferSave) end
   elseif event == "PLAYER_LOGOUT" then
     bagTimer = false
     safe(ScanHoldings)
+    DB.savedAt = now()                                 -- the game writes the file right after this event
   elseif event == "BANKFRAME_OPENED" then
     bankOpen = true
     safe(ScanBank)
@@ -495,6 +571,7 @@ f:SetScript("OnEvent", function(_, event, arg1)
     safe(CheckMerchant)
     Dbg("merchant closed")
     merchant = nil
+    safe(OfferSave)
   elseif event == "BAG_UPDATE_DELAYED" then
     if merchant then safe(CheckMerchant) end
     safe(ScheduleHoldings)
@@ -506,6 +583,15 @@ end)
 SLASH_FMITRACKER1 = "/fmit"
 SlashCmdList["FMITRACKER"] = function(msg)
   if not DB then return end
+  msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+  if msg == "save" then SaveNow(); return end
+  if msg == "prompt off" or msg == "prompt on" then
+    DB.opt.prompt = (msg == "prompt on")
+    if not DB.opt.prompt then HidePrompt() end
+    print("|cff66ccffFMI Tracker|r: the save reminder is " .. (DB.opt.prompt and "on" or "off") .. ".")
+    return
+  end
+  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save writes them now (reloads the interface); /fmit prompt off|on.")
   local n = #DB.log
   print("|cff66ccffFMI Tracker " .. VERSION .. "|r: " .. n .. " entries (written to the file on /reload or logout). Mails looked at: " .. stats.mails .. ", auction invoices found: " .. stats.invoices .. ".")
   for i = math.max(1, n - 4), n do print("  " .. DB.log[i]) end

@@ -61,9 +61,23 @@ function GetRepairAllCost() return 0 end
 function RepairAllItems() end
 function TakeTaxiNode() end
 function BuyTrainerService() end
-function CreateFrame() return {
-  RegisterEvent = function(self, e) _events[e] = true end,
-  SetScript = function(self, name, fn) _scripts[name] = fn end } end
+-- any widget: unknown methods do nothing (CreateFontString gives another widget); OnEvent of the addon frame is kept
+_reloads, _combat, _instance = 0, false, false
+function ReloadUI() _reloads = _reloads + 1 end
+function InCombatLockdown() return _combat end
+function IsInInstance() return _instance, _instance and "party" or "none" end
+UIParent = {}
+local function widget()
+  return setmetatable({}, { __index = function(t, k)
+    if k == "CreateFontString" then return function() return widget() end end
+    return function() end end })
+end
+function CreateFrame()
+  local o = widget()
+  o.RegisterEvent = function(self, e) _events[e] = true end
+  o.SetScript = function(self, name, fn) if name == "OnEvent" then _scripts[name] = fn else rawset(self, "_" .. name, fn) end end
+  return o
+end
 function hooksecurefunc(name, fn) _hooks[name] = fn; local orig = _G[name]; _G[name] = function(...) local r = orig(...); fn(...); return r end end
 SlashCmdList = {}
 function fire(ev, a) _scripts.OnEvent(nil, ev, a) end

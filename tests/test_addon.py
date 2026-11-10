@@ -172,6 +172,65 @@ class Addon(unittest.TestCase):
         self.assertEqual(self.rows(), [])
 
 
+    # ------------------------------------------------------------ the save reminder (0.4.0)
+    def sale(self):
+        self.lua.execute('_mail = {{sender="AH", subject="s", money=7600, daysLeft=29.5, invoice={type="seller",name="Copper Ore",player="B",bid=8000,buyout=8000,deposit=300,cut=400,count=20}}}')
+        self.g.fire('MAIL_SHOW')
+
+    def shown(self):
+        return bool(self.lua.eval('FMITracker.promptShown()'))
+
+    def test_closing_the_mailbox_with_new_entries_offers_a_save_and_the_button_reloads(self):
+        self.g.fire('MAIL_SHOW')
+        self.g.fire('MAIL_CLOSED')
+        self.assertFalse(self.shown())                                  # nothing new: no plate
+        self.sale()
+        self.g.fire('MAIL_CLOSED')
+        self.assertTrue(self.shown())
+        self.assertEqual(self.lua.eval('FMITracker.unsaved()'), 1)
+        self.lua.execute('FMITracker.save()')
+        self.assertEqual(self.lua.eval('_reloads'), 1)
+
+    def test_never_in_combat_or_an_instance_it_comes_back_after(self):
+        self.lua.execute('_combat = true')
+        self.sale()
+        self.g.fire('MAIL_CLOSED')
+        self.assertFalse(self.shown())
+        self.lua.execute('_combat = false')
+        self.g.fire('PLAYER_REGEN_ENABLED')
+        self.assertTrue(self.shown())
+        self.lua.execute('FMITracker.later(); _instance = true')
+        self.lua.execute('_bags = {[2770]=30}')
+        self.g.fire('MERCHANT_SHOW')
+        self.lua.execute('_bags = {[2770]=10}')
+        self.g.setmoney(self.lua.eval('_money') + 2000)
+        self.g.fire('MERCHANT_CLOSED')
+        self.assertFalse(self.shown())                                  # in an instance
+        self.lua.execute('_instance = false')
+        self.g.fire('PLAYER_ENTERING_WORLD')
+        self.assertTrue(self.shown())
+
+    def test_later_waits_for_something_new_and_the_reminder_can_be_switched_off(self):
+        self.sale()
+        self.g.fire('MAIL_CLOSED')
+        self.lua.execute('FMITracker.later()')
+        self.assertFalse(self.shown())
+        self.g.fire('MAIL_CLOSED')
+        self.assertFalse(self.shown())                                  # nothing new since "Later"
+        self.lua.execute('SlashCmdList["FMITRACKER"]("prompt off")')
+        self.lua.execute('_mail[2] = {sender="AH", subject="s2", money=500, daysLeft=29.4, invoice={type="seller",name="Copper Ore",player="C",bid=600,buyout=600,deposit=10,cut=30,count=1}}')
+        self.g.fire('MAIL_SHOW')
+        self.g.fire('MAIL_CLOSED')
+        self.assertFalse(self.shown())
+        self.assertFalse(self.lua.eval('FMITrackerDB.opt.prompt'))
+        self.lua.execute('SlashCmdList["FMITRACKER"]("save")')
+        self.assertEqual(self.lua.eval('_reloads'), 1)
+
+    def test_the_time_of_the_write_is_kept(self):
+        self.lua.execute('_t = 1234567')
+        self.g.fire('PLAYER_LOGOUT')
+        self.assertEqual(self.lua.eval('FMITrackerDB.savedAt'), 1234567)
+
 
 if __name__ == '__main__':
     unittest.main()

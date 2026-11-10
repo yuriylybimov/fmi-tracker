@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 (10 Nov 2026)
+- **Save reminder:** the game writes the file only on `/reload`, logout or exit. When a mailbox or a merchant window closes and something new was recorded, a small plate offers "N new entries not saved for the app yet" with **Save for the app** (reloads the interface; a click, so the player's own action) and **Later** (waits until there is something new again). It never shows in combat or in an instance (it comes back after), and hides by itself after 45 s.
+- `/fmit save` writes the file now (reloads the interface); `/fmit prompt off|on` switches the reminder (kept in `FMITrackerDB.opt.prompt`); `/fmit` also says how many entries wait.
+- `FMITrackerDB.savedAt`: the time of the last write (set at `PLAYER_LOGOUT`, which also fires on `/reload`).
+- A global `FMITracker` table for other addons: `unsaved()`, `promptShown()`, `offer()`, `save()`, `later()`.
+- Tests: 4 new (plate after the mailbox, combat and instances, Later and switching off, the time of the write).
+
 ## 0.3.0 (9 Nov 2026)
 - **Profession trainers apart:** money paid to a profession trainer is logged as `tp`, to a class or riding trainer as `tr` (`IsTradeskillTrainer()` at the purchase). Entries written before keep `tr` for any trainer.
 - Test: 1 new (class and profession trainer).

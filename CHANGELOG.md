@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0 (10 Nov 2026)
+- Tooltip prices named by what they are:
+  - **FMI last seen (7 min ago, 267 listed)**: the cheapest lot you saw yourself on the auction house (was "FMI AH now"); now shown for 24 h, also when the app's data is newer.
+  - **FMI min (13 min ago, 426 listed)**: the cheapest lot of the whole auction house in the app's latest snapshot (was "FMI lowest lot", shown only when far under the market).
+  - **FMI real price**: the price at 15% of the listed units, cheapest first, so a few bait lots cannot fake it (was "FMI market"); shown only when at least 3% above the min.
+
 ## 0.8.2 (10 Nov 2026)
 - The "FMI: on your Watch list" line is gone from the tooltip (the app still sends the list; nothing shows it in the game for now).
 

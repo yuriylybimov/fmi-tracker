@@ -1,4 +1,4 @@
--- FMI Tracker 0.8.2
+-- FMI Tracker 0.9.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -19,11 +19,11 @@
 -- 0.5.0: reads FMITrackerAppData (the addon FMITracker_Data, written by the Market Intelligence app into the AddOns folder)
 -- and adds market price, demand, your last sale / purchase and the Watch mark to item tooltips. /fmit tooltip off|on.
 -- 0.6.0: remembers the auction prices the game shows you while the auction house is open (search results and an item's
--- lots; it never searches by itself) and puts them in the tooltip at once: "FMI AH now", no /reload needed.
+-- lots; it never searches by itself) and puts them in the tooltip at once: "FMI last seen", no /reload needed.
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.8.2"
+local VERSION = "0.9.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -641,11 +641,11 @@ local function TooltipLines(itemId, link)
   local variant = isVariant(link)
   local it = (not variant) and A.items and A.items[itemId]
   local lv = (not variant) and DB and DB.live and DB.live[itemId]
-  if lv and not (now() - lv[3] < 6 * 3600 and (not A.at or lv[3] >= A.at)) then lv = nil end
+  if lv and now() - lv[3] >= 24 * 3600 then lv = nil end
   local s, b = A.sold and A.sold[itemId], A.bought and A.bought[itemId]
   local out = {}
   if lv then
-    out[#out + 1] = { "FMI AH now (" .. agoText(lv[3]) .. ((lv[2] or 0) > 0 and (", " .. lv[2] .. " listed") or "") .. ")", coins(lv[1]) }
+    out[#out + 1] = { "FMI last seen (" .. agoText(lv[3]) .. ((lv[2] or 0) > 0 and (", " .. lv[2] .. " listed") or "") .. ")", coins(lv[1]) }
   end
   if it then
     local market, min, units, tier, perDay, change = it[1], it[2], it[3], it[4], it[5], it[6]
@@ -654,8 +654,11 @@ local function TooltipLines(itemId, link)
     local info = {}
     if when then info[#info + 1] = when end
     if units and units > 0 then info[#info + 1] = units .. " listed" end
-    if market or min then out[#out + 1] = { "FMI market" .. (#info > 0 and (" (" .. table.concat(info, ", ") .. ")") or ""), coins(market or min) } end
-    if market and min and min < market * 0.9 then out[#out + 1] = { "FMI lowest lot", coins(min) } end
+    -- 0.9.0: the lowest lot of the whole auction house, then the real price (the price at 15% of the listed units,
+    -- cheapest first: a few bait lots cannot fake it) only when it is at least 3% above the lowest lot.
+    local low = min or market
+    if low then out[#out + 1] = { "FMI min" .. (#info > 0 and (" (" .. table.concat(info, ", ") .. ")") or ""), coins(low) } end
+    if market and min and market >= min * 1.03 then out[#out + 1] = { "FMI real price", coins(market) } end
     if change then out[#out + 1] = { "FMI 24h", pct(change) } end
     if tier and TIER[tier] then
       out[#out + 1] = { "FMI demand", TIER[tier] .. ((perDay and perDay > 0) and (" · ~" .. math.floor(perDay + 0.5) .. "/day") or "") }

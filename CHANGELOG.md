@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 (10 Nov 2026)
+- The "FMI: on your Watch list" line is gone from the tooltip (the app still sends the list; nothing shows it in the game for now).
+
+## 0.8.1 (10 Nov 2026)
+- Tooltip lines in the style of the other auction addons (AuctionDB): no header and no auction-house name; each line says what it is with the time and the quantity in brackets, value on the right: **FMI market (23 min ago, 500 listed)**, FMI lowest lot, FMI 24h, FMI demand, **FMI AH now (3 min ago, 450 listed)**, **FMI your last sale (2 d ago)**, FMI your last buy, FMI: on your Watch list. One label colour (bronze), white values; the age turns orange past 6 h.
+
 ## 0.8.0 (10 Nov 2026)
 - **One FMI block in the tooltip** with a header **FMI · <auction house>** and the age of the app's scan on the right ("scan 40 min ago"; orange when older than 6 h). Under it, indented: AH now (live, when newer), Market, Lowest lot (when more than 10% under), Listed (units on the AH), 24h (the market price against the app's snapshot a day before, green / red from 3%), Demand, Your last sale / buy, On your Watch list.
 - Money with the game's coin icons (the client of WoW Forever has no `GetCoinTextureString`, so 0.5.0 showed "2s 9c"); zero units left out (1g 10s, not 1g 10s 0c).

@@ -1,4 +1,4 @@
--- FMI Tracker 0.10.0
+-- FMI Tracker 0.11.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.10.0"
+local VERSION = "0.11.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -452,7 +452,36 @@ local function HidePrompt()
   promptShown = false
   if prompt then prompt:Hide() end
 end
-local function SaveNow() ReloadUI() end
+-- 0.11.0: the app's prices in the game are older than an hour (the game reads them only on a reload). Not when the last
+-- sync reload brought nothing newer (the app is not running): then not again for 2 h.
+local function appStale()
+  local A = type(FMITrackerAppData) == "table" and FMITrackerAppData or nil
+  if not (A and DB) then return false end
+  local w = A.written or A.at
+  if not w or now() - w < 3600 then return false end
+  if DB.syncFrom and DB.syncFrom == w and now() - (DB.syncAt or 0) < 7200 then return false end
+  return true
+end
+local function SaveNow()
+  local A = type(FMITrackerAppData) == "table" and FMITrackerAppData or nil
+  if DB then DB.syncFrom, DB.syncAt = A and (A.written or A.at) or nil, now() end
+  ReloadUI()
+end
+local function agoTextShort()
+  local A = type(FMITrackerAppData) == "table" and FMITrackerAppData or {}
+  local d = now() - (A.written or A.at or now())
+  return d < 7200 and (math.floor(d / 60) .. " min") or (math.floor(d / 3600) .. " h")
+end
+-- 0.11.0: sync on its own when a mailbox, a merchant or the auction house closes, if there is something to save or the
+-- app's prices are stale: never in combat or an instance, at most every 20 min. /fmit autosync off switches it off.
+local function AutoSync()
+  if not DB or (DB.opt and DB.opt.autosync == false) then return end
+  if not (newN > 0 or appStale()) or quietPlace() then return end
+  if now() - (DB.lastAuto or 0) < 1200 then return end
+  DB.lastAuto = now()
+  print("|cff66ccffFMI Tracker|r: saving for the app and loading its newest prices (reloads the interface). /fmit autosync off stops this.")
+  if C_Timer and C_Timer.After then C_Timer.After(1, SaveNow) else SaveNow() end
+end
 local function SavePrompt()
   if prompt then return prompt end
   local p = CreateFrame("Frame", "FMITrackerSavePrompt", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
@@ -502,10 +531,14 @@ end
 -- The quiet way (default): a small button under the mailbox or the merchant window, only while one is open and
 -- something is unsaved. Nothing pops up.
 local saveBtn, btnShown, openHost = nil, false, nil
+local function hostFrame()
+  return (openHost == "mail" and MailFrame) or (openHost == "merchant" and MerchantFrame)
+    or (openHost == "ah" and (AuctionHouseFrame or AuctionFrame)) or nil
+end
 local function UpdateSaveButton()
-  local host = (openHost == "mail" and MailFrame) or (openHost == "merchant" and MerchantFrame) or nil
+  local host = hostFrame()
   if host and host.IsShown and host:IsShown() == false then openHost, host = nil, nil end   -- the window is gone
-  local want = DB and saveMode() == "button" and openHost and newN > 0
+  local want = DB and saveMode() == "button" and openHost and (newN > 0 or appStale())
   if not want then
     if saveBtn then saveBtn:Hide() end
     btnShown = false
@@ -520,14 +553,18 @@ local function UpdateSaveButton()
       if not GameTooltip then return end
       GameTooltip:SetOwner(self, "ANCHOR_TOP")
       GameTooltip:AddLine("FMI Tracker")
-      GameTooltip:AddLine("Writes the new entries for the Market Intelligence app now. The game writes them only on a reload or logout, so this reloads the interface (a few seconds). Logging out saves them too.", 1, 1, 1, true)
+      if newN > 0 then
+        GameTooltip:AddLine("Writes the new entries for the Market Intelligence app and loads its newest prices. The game does both only on a reload or logout, so this reloads the interface (a few seconds).", 1, 1, 1, true)
+      else
+        GameTooltip:AddLine("The app's prices in your tooltips are " .. agoTextShort() .. " old. The game reads the app's newer ones only on a reload, so this reloads the interface (a few seconds).", 1, 1, 1, true)
+      end
       GameTooltip:Show()
     end)
     saveBtn:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
   end
   saveBtn:ClearAllPoints()
   if host then saveBtn:SetPoint("TOPRIGHT", host, "BOTTOMRIGHT", 0, -2) else saveBtn:SetPoint("TOP", UIParent, "TOP", 0, -110) end
-  saveBtn:SetText(("Save for the app (%d)"):format(newN))
+  saveBtn:SetText(newN > 0 and ("Save for the app (%d)"):format(newN) or "Load the app's prices")
   saveBtn:Show()
   btnShown = true
 end
@@ -601,20 +638,37 @@ local function ReadItem(itemKey)
   if low then Seen(itemKey.itemID, low, qty) end
 end
 
--- ---------------------------------------------------------------- the full scan another addon asked for (0.10.0)
--- AuctionDB (AHDB) and others ask the game for the whole auction house (C_AuctionHouse.ReplicateItems) when it opens.
--- The answer is one list any addon can read; REPLICATE_ITEM_LIST_UPDATE says it is there. FMI Tracker reads it too,
--- without asking for anything itself: the lowest buyout per unit and the listed quantity of every plain item, in
--- chunks so the game does not stall. Kept in memory only (SCAN), so the tooltip is fresh from the moment the house
--- was scanned; after a /reload the app's data (rewritten every few minutes) is newer anyway.
+-- ---------------------------------------------------------------- full scan of the auction house (0.10.0, 0.11.0)
+-- When the auction house opens, one full scan of it is asked for (C_AuctionHouse.ReplicateItems, at most every 15 min,
+-- the game's own limit) unless AuctionDB (AHDB) is loaded: it asks for the same scan itself and both read the one answer.
+-- REPLICATE_ITEM_LIST_UPDATE says the list is there. It is read in chunks so the game does not stall: per plain item the
+-- lowest buyout per unit, the units listed and the real price (the price at 15% of the listed units, cheapest first, so a
+-- few bait lots cannot fake it). Kept in FMITrackerDB.scan (the latest scan only), so it also survives a /reload; the
+-- app's data wins whenever it is newer. Nothing is ever bought or posted.
 local SCAN, scanAt, scanGen = {}, nil, 0
 local SCAN_CHUNK = 2000
+local REAL_SHARE = 0.15
+local function ahdbLoaded()
+  local fn = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
+  return fn and fn("AuctionDB") and true or false
+end
 local function plainScanItem(idx, itemId)
   local fn = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
   local classId = fn and select(6, fn(itemId))
   if classId ~= 2 and classId ~= 4 then return true end           -- only weapons and armour have suffix variants
   local link = C_AuctionHouse.GetReplicateItemLink and C_AuctionHouse.GetReplicateItemLink(idx)
   return not isVariant(link)
+end
+local function summarise(lots)
+  table.sort(lots, function(x, y) return x[1] < y[1] end)
+  local total = 0
+  for _, l in ipairs(lots) do total = total + l[2] end
+  local want, run, real = total * REAL_SHARE, 0, lots[#lots][1]
+  for _, l in ipairs(lots) do
+    run = run + l[2]
+    if run >= want then real = l[1]; break end
+  end
+  return math.floor(lots[1][1] + 0.5), total, math.floor(real + 0.5)
 end
 local function ReadReplicate()
   local AH = C_AuctionHouse
@@ -629,24 +683,38 @@ local function ReadReplicate()
     for idx = i, last do
       local _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemId = AH.GetReplicateItemInfo(idx)
       if itemId and buyout and buyout > 0 and count and count > 0 then
-        local unit = buyout / count
         local a = acc[itemId]
         if a == nil then
-          if plainScanItem(idx, itemId) then acc[itemId] = { unit, count } else acc[itemId] = false end
-        elseif a then
-          if unit < a[1] then a[1] = unit end
-          a[2] = a[2] + count
+          a = plainScanItem(idx, itemId) and {} or false
+          acc[itemId] = a
         end
+        if a then a[#a + 1] = { buyout / count, count } end
       end
     end
     i = last + 1
     if i < n then C_Timer.After(0, step) return end
     local t = now()
     SCAN = {}
-    for id, a in pairs(acc) do if a then SCAN[id] = { math.floor(a[1] + 0.5), a[2], t } end end
+    for id, lots in pairs(acc) do
+      if lots and #lots > 0 then
+        local low, units, real = summarise(lots)
+        SCAN[id] = { low, units, t, real }
+      end
+    end
     scanAt = t
+    if DB then DB.scan = { at = t, items = SCAN } end
   end
   step()
+end
+local function AskScan()
+  local AH = C_AuctionHouse
+  if not (DB and AH and AH.ReplicateItems) or ahdbLoaded() then return end
+  if now() - (DB.ownScanAt or 0) < 900 then return end
+  DB.ownScanAt = now()
+  AH.ReplicateItems()
+end
+local function LoadScan()
+  if DB and type(DB.scan) == "table" and type(DB.scan.items) == "table" then SCAN, scanAt = DB.scan.items, DB.scan.at end
 end
 
 -- ---------------------------------------------------------------- tooltip lines from the app (0.5.0)
@@ -682,44 +750,69 @@ end
 -- The FMI lines of one item, in the style of the other auction addons: "FMI <what> (<when>, <how many>)" on the left,
 -- the value on the right; a list of {left, right}. A variant (bonus ids, enchant, suffix) gets no price of the plain
 -- item. The age of the app's scan turns orange when older than 6 h. Nothing at all when there is nothing to say.
+local function appData() return type(FMITrackerAppData) == "table" and FMITrackerAppData or {} end
+-- AHDB already shows the lowest lot with its age: then FMI shows only what AHDB does not (real price, 24 h, demand, your
+-- trades). /fmit min on|off|auto (auto by default).
+local function hideMin()
+  local o = DB and DB.opt and DB.opt.min
+  if o == "on" then return false end
+  if o == "off" then return true end
+  return ahdbLoaded()
+end
+-- the in-game scan of an item when it is newer than the app's data, else nil
+local function freshScan(itemId)
+  local sc = scanAt and SCAN[itemId]
+  local A = appData()
+  if sc and A.at and A.at >= sc[3] then return nil end
+  return sc
+end
 local function TooltipLines(itemId, link)
   if not itemId then return {} end
   if DB and DB.opt and DB.opt.tooltip == false then return {} end
-  local A = type(FMITrackerAppData) == "table" and FMITrackerAppData or {}
+  local A = appData()
   local variant = isVariant(link)
   local it = (not variant) and A.items and A.items[itemId]
   local lv = (not variant) and DB and DB.live and DB.live[itemId]
   if lv and now() - lv[3] >= 24 * 3600 then lv = nil end
-  -- 0.10.0: a full scan of the house in this session (read from another addon's scan) beats both older readings
-  local sc = (not variant) and scanAt and SCAN[itemId]
+  local sc = (not variant) and freshScan(itemId)
   if sc and lv and lv[3] > sc[3] then sc = nil end                -- what you searched after the scan is newer
   if sc then lv = nil end
+  local noMin = hideMin()
   local s, b = A.sold and A.sold[itemId], A.bought and A.bought[itemId]
   local out = {}
-  if lv then
+  if lv and not noMin then
     out[#out + 1] = { "FMI last seen (" .. agoText(lv[3]) .. ((lv[2] or 0) > 0 and (", " .. lv[2] .. " listed") or "") .. ")", coins(lv[1]) }
   end
-  local appNewer = it and A.at and (not sc or A.at > sc[3])
-  if sc and not appNewer then
-    out[#out + 1] = { "FMI min (in game, " .. agoText(sc[3]) .. ", " .. sc[2] .. " listed)", coins(sc[1]) }
+  if sc then
+    local low, units, real = sc[1], sc[2], sc[4]
+    if not noMin then out[#out + 1] = { "FMI min (in game, " .. agoText(sc[3]) .. ", " .. units .. " listed)", coins(low) } end
+    if real and real >= low * 1.03 then
+      out[#out + 1] = { "FMI real price" .. (noMin and (" (in game, " .. agoText(sc[3]) .. ")") or ""), coins(real) }
+    end
+    -- 24 h against the app's market a day before its snapshot (market / (1 + change))
+    local market, change = it and it[1], it and it[6]
+    if market and change and real then
+      local before = market / (1 + change / 100)
+      if before > 0 then out[#out + 1] = { "FMI 24h", pct(math.floor((real / before - 1) * 100 + 0.5)) } end
+    end
   end
   if it then
     local market, min, units, tier, perDay, change = it[1], it[2], it[3], it[4], it[5], it[6]
-    local when = A.at and agoText(A.at) or nil
-    if when and now() - A.at > 6 * 3600 then when = "|cffff9a3d" .. when .. "|r" end
-    local info = {}
-    if when then info[#info + 1] = when end
-    if units and units > 0 then info[#info + 1] = units .. " listed" end
-    -- 0.9.0: the lowest lot of the whole auction house, then the real price (the price at 15% of the listed units,
-    -- cheapest first: a few bait lots cannot fake it) only when it is at least 3% above the lowest lot.
-    local low = min or market
-    if low and (appNewer or not sc) then
-      out[#out + 1] = { "FMI min" .. (#info > 0 and (" (" .. table.concat(info, ", ") .. ")") or ""), coins(low) }
+    if not sc then
+      local when = A.at and agoText(A.at) or nil
+      if when and now() - A.at > 6 * 3600 then when = "|cffff9a3d" .. when .. "|r" end
+      local info = {}
+      if when then info[#info + 1] = when end
+      if units and units > 0 then info[#info + 1] = units .. " listed" end
+      local low = min or market
+      if low and not noMin then
+        out[#out + 1] = { "FMI min" .. (#info > 0 and (" (" .. table.concat(info, ", ") .. ")") or ""), coins(low) }
+      end
+      if market and min and market >= min * 1.03 then
+        out[#out + 1] = { "FMI real price" .. (noMin and when and (" (" .. when .. ")") or ""), coins(market) }
+      end
+      if change then out[#out + 1] = { "FMI 24h", pct(change) } end
     end
-    if market and min and market >= min * 1.03 then
-      out[#out + 1] = { "FMI real price" .. ((sc and not appNewer) and (" (" .. agoText(A.at) .. ")") or ""), coins(market) }
-    end
-    if change then out[#out + 1] = { "FMI 24h", pct(change) } end
     if tier and TIER[tier] then
       out[#out + 1] = { "FMI demand", TIER[tier] .. ((perDay and perDay > 0) and (" · ~" .. math.floor(perDay + 0.5) .. "/day") or "") }
     end
@@ -728,12 +821,99 @@ local function TooltipLines(itemId, link)
   if b then out[#out + 1] = { "FMI your last buy (" .. agoText(b[2]) .. ")", coins(b[1]) } end
   return out
 end
+-- The price one unit costs or brings, the freshest there is: the in-game scan, else the app; the real price before the
+-- lowest lot. nil when nothing is known.
+local function unitPrice(itemId)
+  local sc = freshScan(itemId)
+  if sc then return sc[4] or sc[1] end
+  local it = appData().items and appData().items[itemId]
+  if it then return it[1] or it[2] end
+  return nil
+end
 local function AddLines(tt, itemId, link)
   for _, l in ipairs(TooltipLines(itemId, link)) do
     if l[2] then tt:AddDoubleLine(l[1], l[2], 0.86, 0.62, 0.36, 1, 1, 1)
     else tt:AddLine(l[1], 0.86, 0.62, 0.36) end
   end
 end
+-- ---------------------------------------------------------------- the profession window (0.11.0)
+-- Over the item a recipe makes: what the reagents cost on the AH, what the result sells for, and the profit after the
+-- AH cut, all with the freshest prices (the in-game scan, else the app). A reagent without a price is named instead.
+local CUT = 0.05
+local function craftLines(reagents, outId, made)
+  if DB and DB.opt and DB.opt.tooltip == false then return {} end
+  local cost, missing = 0, {}
+  for _, r in ipairs(reagents) do
+    local p = r.id and unitPrice(r.id)
+    if p then cost = cost + p * r.count else missing[#missing + 1] = r.name or ("item " .. tostring(r.id)) end
+  end
+  local out = {}
+  if #missing > 0 then
+    out[#out + 1] = { "FMI craft: no AH price for " .. table.concat(missing, ", "), nil }
+    return out
+  end
+  if #reagents == 0 then return out end
+  out[#out + 1] = { "FMI craft: reagents", coins(cost) }
+  local sell = outId and unitPrice(outId)
+  if sell then
+    made = math.max(1, made or 1)
+    local net = sell * made * (1 - CUT)
+    out[#out + 1] = { "FMI craft: sells" .. (made > 1 and (" (" .. made .. " per craft)") or ""), coins(sell * made) }
+    local profit = net - cost
+    local txt = (profit >= 0 and "+" or "-") .. coins(math.abs(profit))
+    out[#out + 1] = { "FMI craft: profit after " .. math.floor(CUT * 100 + 0.5) .. "% cut", profit >= 0 and ("|cff4fd27a" .. txt .. "|r") or ("|cfff07a6a" .. txt .. "|r") }
+  end
+  return out
+end
+-- classic trade skill window: reagents of recipe `skill`
+local function tradeSkillReagents(skill)
+  local list = {}
+  local n = GetTradeSkillNumReagents and GetTradeSkillNumReagents(skill) or 0
+  for r = 1, n do
+    local name, _, count = GetTradeSkillReagentInfo(skill, r)
+    local link = GetTradeSkillReagentItemLink and GetTradeSkillReagentItemLink(skill, r)
+    list[#list + 1] = { id = itemIdOf(link), name = name, count = count or 1 }
+  end
+  local made = GetTradeSkillNumMade and GetTradeSkillNumMade(skill) or 1
+  local outLink = GetTradeSkillItemLink and GetTradeSkillItemLink(skill)
+  return list, itemIdOf(outLink), made
+end
+-- the newer professions window: reagents of a recipe id
+local function schematicReagents(recipeId)
+  local S = C_TradeSkillUI and C_TradeSkillUI.GetRecipeSchematic and C_TradeSkillUI.GetRecipeSchematic(recipeId, false)
+  if not S then return {}, nil, 1 end
+  local list = {}
+  for _, slot in ipairs(S.reagentSlotSchematics or {}) do
+    local r = slot.reagents and slot.reagents[1]
+    if r and r.itemID and (slot.reagentType == nil or slot.reagentType == 1) then
+      local name = C_Item and C_Item.GetItemNameByID and C_Item.GetItemNameByID(r.itemID)
+      list[#list + 1] = { id = r.itemID, name = name, count = slot.quantityRequired or 1 }
+    end
+  end
+  return list, S.outputItemID, S.quantityMin or 1
+end
+local function AddCraft(tt, reagents, outId, made)
+  local lines = craftLines(reagents, outId, made)
+  for _, l in ipairs(lines) do
+    if l[2] then tt:AddDoubleLine(l[1], l[2], 0.86, 0.62, 0.36, 1, 1, 1) else tt:AddLine(l[1], 0.86, 0.62, 0.36) end
+  end
+  if #lines > 0 and tt.Show then tt:Show() end
+end
+local function HookCrafts()
+  if not GameTooltip then return end
+  if GameTooltip.SetTradeSkillItem then
+    hooksecurefunc(GameTooltip, "SetTradeSkillItem", function(tt, skill, reagent)
+      if reagent then return end                                    -- a reagent: its own price lines are enough
+      safe(function() AddCraft(tt, tradeSkillReagents(skill)) end)
+    end)
+  end
+  if GameTooltip.SetRecipeResultItem then
+    hooksecurefunc(GameTooltip, "SetRecipeResultItem", function(tt, recipeId)
+      safe(function() AddCraft(tt, schematicReagents(recipeId)) end)
+    end)
+  end
+end
+
 local hooked = false
 local function HookTooltips()
   if hooked then return end
@@ -757,6 +937,7 @@ end
 FMITracker.tooltipLines = TooltipLines
 FMITracker.live = function(itemId) return DB and DB.live and DB.live[itemId] end
 FMITracker.scan = function(itemId) return SCAN[itemId] end
+FMITracker.craftLines = craftLines
 
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
@@ -775,6 +956,8 @@ f:RegisterEvent("BANKFRAME_CLOSED")
 f:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
 pcall(f.RegisterEvent, f, "BANK_TABS_CHANGED")       -- not on every client
 pcall(f.RegisterEvent, f, "REPLICATE_ITEM_LIST_UPDATE")
+pcall(f.RegisterEvent, f, "AUCTION_HOUSE_SHOW")
+pcall(f.RegisterEvent, f, "AUCTION_HOUSE_CLOSED")
 for _, e in ipairs({ "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED", "COMMODITY_SEARCH_RESULTS_UPDATED",
                      "ITEM_SEARCH_RESULTS_UPDATED" }) do pcall(f.RegisterEvent, f, e) end   -- the modern auction house only
 
@@ -787,6 +970,7 @@ f:SetScript("OnEvent", function(_, event, arg1)
     DB.opt = DB.opt or {}
     if DB.opt.save == nil then DB.opt.save = (DB.opt.prompt == false) and "off" or "button" end   -- 0.7.0: quiet by default
     DB.live = DB.live or {}
+    LoadScan()
     for _ in pairs(DB.live) do liveN = liveN + 1 end
     local t = now()
     DB.seenN = DB.seenN or {}
@@ -805,6 +989,7 @@ f:SetScript("OnEvent", function(_, event, arg1)
     if type(BuyTrainerService) == "function" then hooksecurefunc("BuyTrainerService", function() Expect(trainerKind()) end) end
     if C_Trainer and C_Trainer.BuyProvidedService then hooksecurefunc(C_Trainer, "BuyProvidedService", function() Expect(trainerKind()) end) end
     safe(HookTooltips)
+    safe(HookCrafts)
   elseif event == "MAIL_SHOW" or event == "MAIL_INBOX_UPDATE" then
     openHost = "mail"
     safe(ScanMail)
@@ -814,6 +999,15 @@ f:SetScript("OnEvent", function(_, event, arg1)
     openHost = nil
     safe(UpdateSaveButton)
     safe(OfferSave)
+    safe(AutoSync)
+  elseif event == "AUCTION_HOUSE_SHOW" then
+    openHost = "ah"
+    safe(UpdateSaveButton)
+    if C_Timer and C_Timer.After then C_Timer.After(2, function() safe(AskScan) end) else safe(AskScan) end
+  elseif event == "AUCTION_HOUSE_CLOSED" then
+    if openHost == "ah" then openHost = nil end
+    safe(UpdateSaveButton)
+    safe(AutoSync)
   elseif event == "PLAYER_REGEN_ENABLED" then
     if pending then safe(OfferSave) end
   elseif event == "PLAYER_ENTERING_WORLD" then
@@ -843,6 +1037,7 @@ f:SetScript("OnEvent", function(_, event, arg1)
     openHost = nil
     safe(UpdateSaveButton)
     safe(OfferSave)
+    safe(AutoSync)
   elseif event == "BAG_UPDATE_DELAYED" then
     if merchant then safe(CheckMerchant) end
     safe(ScheduleHoldings)
@@ -871,6 +1066,19 @@ SlashCmdList["FMITRACKER"] = function(msg)
     print("|cff66ccffFMI Tracker|r: the tooltip lines are " .. (DB.opt.tooltip and "on" or "off") .. ".")
     return
   end
+  if msg == "sync" then SaveNow(); return end
+  local mo = msg:match("^min (%a+)$")
+  if mo == "on" or mo == "off" or mo == "auto" then
+    DB.opt.min = mo
+    print("|cff66ccffFMI Tracker|r: FMI min lines " .. ({ on = "always shown", off = "hidden", auto = "hidden while AuctionDB is loaded" })[mo] .. ".")
+    return
+  end
+  local au = msg:match("^autosync (%a+)$")
+  if au == "on" or au == "off" then
+    DB.opt.autosync = (au == "on")
+    print("|cff66ccffFMI Tracker|r: automatic sync when a mailbox, merchant or the auction house closes is " .. au .. ".")
+    return
+  end
   local m = msg:match("^reminder (%a+)$") or ({ ["prompt off"] = "off", ["prompt on"] = "popup" })[msg]
   if m == "button" or m == "popup" or m == "off" then
     DB.opt.save = m
@@ -879,7 +1087,7 @@ SlashCmdList["FMITRACKER"] = function(msg)
     print("|cff66ccffFMI Tracker|r: save reminder: " .. ({ button = "a button under the mailbox and merchant windows", popup = "a plate after the mailbox or a merchant (at most every 30 min)", off = "off (logout and /fmit save still save)" })[m] .. ".")
     return
   end
-  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save writes them now (reloads the interface); /fmit reminder button|popup|off; /fmit tooltip off|on.")
+  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save (or sync) writes them and loads the app's prices (reloads the interface); /fmit autosync on|off; /fmit min on|off|auto; /fmit reminder button|popup|off; /fmit tooltip off|on.")
   local A = FMITrackerAppData
   if type(A) == "table" and A.items then
     local n = 0

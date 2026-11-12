@@ -365,16 +365,108 @@ class Addon(unittest.TestCase):
     def test_the_scan_leads_the_tooltip_until_the_app_data_is_newer(self):
         self.app_data(at_offset=3 * 3600)                               # the app's data was read 3 h ago
         self.lua.execute(self.REPL)
-        self.lua.execute('_t = 2000000; _repl = {{2770, 10, 9000}}')
+        # 10 lots: 9000 x1 (bait), 13000 x9: 15% of 10 units is reached at the second lot
+        self.lua.execute('_t = 2000000; _repl = {{2770, 1, 9000}, {2770, 9, 117000}}')
         self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
         self.lua.execute('_t = 2000300')
+        self.assertEqual(self.scan(2770), (9000, 10, 2000000))
         got = self.lines(2770)
-        self.assertEqual(got[0], ('FMI min (in game, 5 min ago, 10 listed)', '9s'))
-        self.assertFalse([l for l in got if l[0].startswith('FMI min (')][1:])   # no second, older min line
-        self.assertEqual(got[1], ('FMI real price (3 h ago)', '1g 25s 50c'))      # the app's, with its age
+        self.assertEqual(got[0], ('FMI min (in game, 5 min ago, 10 listed)', '90s'))
+        self.assertEqual(got[1], ('FMI real price', '1g 30s'))
+        self.assertEqual(len([l for l in got if l[0].startswith('FMI min')]), 1)        # no second, older min line
         self.assertIn(('FMI demand', 'sells fast · ~42/day'), got)
         self.lua.execute('FMITrackerAppData["at"] = 2000200')            # after a reload the app's data is newer again
         self.assertEqual(self.lines(2770)[0], ('FMI min (1 min ago, 300 listed)', '1g 10s'))
+
+    def test_24h_from_the_scan_against_the_app_market_a_day_before(self):
+        self.app_data(at_offset=3 * 3600)
+        self.lua.execute('FMITrackerAppData["items"][2770][6] = 25')     # app: 12550 now, +25% => 10040 a day before
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 2000000; _repl = {{2770, 10, 110440}}')    # 11044 each = +10% on 10040
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.assertIn(('FMI 24h', '+10%'), self.lines(2770))
+
+    def test_with_auctiondb_loaded_no_min_lines_only_what_it_lacks(self):
+        self.app_data()
+        self.lua.execute('C_AddOns = {IsAddOnLoaded = function(n) return n == "AuctionDB" end}')
+        got = self.lines(2770)
+        self.assertFalse([l for l in got if l[0].startswith('FMI min') or l[0].startswith('FMI last seen')])
+        self.assertEqual(got[0], ('FMI real price (1 min ago)', '1g 25s 50c'))
+        self.lua.execute('SlashCmdList["FMITRACKER"]("min on")')
+        self.assertTrue(self.lines(2770)[0][0].startswith('FMI min'))
+        self.lua.execute('SlashCmdList["FMITRACKER"]("min auto"); C_AddOns = nil')
+        self.assertTrue(self.lines(2770)[0][0].startswith('FMI min'))  # no AuctionDB: the min is back
+
+    def test_the_house_is_scanned_on_opening_at_most_every_15_min_and_not_when_auctiondb_does(self):
+        self.lua.execute(self.REPL)
+        self.lua.execute('_asked = 0; C_AuctionHouse.ReplicateItems = function() _asked = _asked + 1 end; _t = 3000000')
+        self.g.fire('AUCTION_HOUSE_SHOW'); self.g.run_timers()
+        self.assertEqual(self.lua.eval('_asked'), 1)
+        self.lua.execute('_t = 3000000 + 600'); self.g.fire('AUCTION_HOUSE_SHOW'); self.g.run_timers()
+        self.assertEqual(self.lua.eval('_asked'), 1)                   # the game allows one every 15 min
+        self.lua.execute('_t = 3000000 + 1000; C_AddOns = {IsAddOnLoaded = function(n) return n == "AuctionDB" end}')
+        self.g.fire('AUCTION_HOUSE_SHOW'); self.g.run_timers()
+        self.assertEqual(self.lua.eval('_asked'), 1)                   # AuctionDB asks itself; we only read
+
+    def test_the_scan_survives_a_reload(self):
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 3000000; _repl = {{2770, 4, 400}}')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.lua.execute('FMITrackerAppData = nil')
+        self.g.fire('ADDON_LOADED', 'FMITracker')
+        self.assertEqual(self.scan(2770), (100, 4, 3000000))
+
+    def test_craft_lines_cost_sell_and_profit_and_a_missing_price(self):
+        self.app_data()                                                   # 2770: 12550 real, 2589: 50
+        cl = self.lua.eval('FMITracker.craftLines')
+        import re
+        plain = lambda v: re.sub(r'\|TInterface\\MoneyFrame\\UI-(Gold|Silver|Copper)Icon[^|]*\|t', lambda m: m.group(1)[0].lower(),
+                                 re.sub(r'\|c[0-9a-fA-F]{8}|\|r', '', v))
+        got = [tuple(plain(v) for v in (l[1], l[2]) if v is not None)
+               for l in cl(self.lua.eval('{{id = 2589, count = 6, name = "Linen"}}'), 2770, 1).values()]
+        self.assertEqual(got, [('FMI craft: reagents', '3s'), ('FMI craft: sells', '1g 25s 50c'),
+                               ('FMI craft: profit after 5% cut', '+1g 16s 23c')])  # 12550 * .95 - 300 = 11622.5
+        miss = cl(self.lua.eval('{{id = 9999, count = 1, name = "Star Ruby"}}'), 2770, 1)
+        self.assertEqual(miss[1][1], 'FMI craft: no AH price for Star Ruby')
+
+    def test_the_trade_skill_tooltip_gets_the_craft_lines(self):
+        self.app_data()
+        self.lua.execute('GameTooltip = {n = {}, AddDoubleLine = function(self, a) table.insert(self.n, a) end, '
+                         ' AddLine = function(self, a) table.insert(self.n, a) end, Show = function() end, '
+                         ' SetTradeSkillItem = function() end}; '
+                         'function GetTradeSkillNumReagents() return 1 end; '
+                         'function GetTradeSkillReagentInfo() return "Linen Cloth", nil, 6, 0 end; '
+                         'function GetTradeSkillReagentItemLink() return "|Hitem:2589::|h" end; '
+                         'function GetTradeSkillNumMade() return 1, 1 end; '
+                         'function GetTradeSkillItemLink() return 2770 end')
+        self.g.fire('PLAYER_LOGIN')
+        self.lua.execute('GameTooltip:SetTradeSkillItem(3)')
+        self.assertEqual(list(self.lua.eval('GameTooltip.n').values())[:2], ['FMI craft: reagents', 'FMI craft: sells'])
+        self.lua.execute('GameTooltip.n = {}; GameTooltip:SetTradeSkillItem(3, 1)')                   # a reagent: no craft lines
+        self.assertEqual(len(self.lua.eval('GameTooltip.n')), 0)
+
+    # ------------------------------------------------------------ sync on its own (0.11.0)
+    def test_closing_the_mailbox_syncs_on_its_own_at_most_every_20_min(self):
+        self.lua.execute('_t = 3000000; FMITrackerAppData = nil')
+        self.g.fire('MAIL_SHOW')
+        self.sale()
+        self.g.fire('MAIL_CLOSED'); self.g.run_timers()
+        self.assertEqual(self.lua.eval('_reloads'), 1)
+        self.lua.execute('_t = 3000000 + 600')
+        self.g.fire('MAIL_SHOW'); self.g.fire('MAIL_CLOSED'); self.g.run_timers()
+        self.assertEqual(self.lua.eval('_reloads'), 1)
+        self.lua.execute('SlashCmdList["FMITRACKER"]("autosync off"); _t = 3000000 + 5000')
+        self.g.fire('MAIL_SHOW'); self.g.fire('MAIL_CLOSED'); self.g.run_timers()
+        self.assertEqual(self.lua.eval('_reloads'), 1)
+
+    def test_stale_app_prices_show_the_button_at_the_auction_house_once_per_sync(self):
+        self.lua.execute('SlashCmdList["FMITRACKER"]("autosync off")')
+        self.lua.execute('_t = 3000000; FMITrackerAppData = {["at"] = 3000000 - 7200, ["written"] = 3000000 - 7200, ["items"] = {}}')
+        self.g.fire('AUCTION_HOUSE_SHOW')
+        self.assertTrue(self.btn())
+        self.lua.execute('FMITracker.save()')                            # reloads: the game would read the file again
+        self.g.fire('AUCTION_HOUSE_CLOSED'); self.g.fire('AUCTION_HOUSE_SHOW')
+        self.assertFalse(self.btn())                                     # same file after the reload: the app is not running
 
     def test_every_item_tooltip_gets_the_lines_but_not_the_comparison_ones(self):
         lua, g = R.LuaRuntime(unpack_returned_tuples=True), None

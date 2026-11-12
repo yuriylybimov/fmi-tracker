@@ -78,7 +78,11 @@ function CreateFrame()
   o.SetScript = function(self, name, fn) if name == "OnEvent" then _scripts[name] = fn else rawset(self, "_" .. name, fn) end end
   return o
 end
-function hooksecurefunc(name, fn) _hooks[name] = fn; local orig = _G[name]; _G[name] = function(...) local r = orig(...); fn(...); return r end end
+function hooksecurefunc(a, b, c)
+  local t, name, fn = _G, a, b
+  if type(a) == "table" then t, name, fn = a, b, c end
+  _hooks[name] = fn; local orig = t[name]; t[name] = function(...) local r = orig(...); fn(...); return r end
+end
 SlashCmdList = {}
 function fire(ev, a) _scripts.OnEvent(nil, ev, a) end
 function run_timers() local t = _timers; _timers = {}; for _, fn in ipairs(t) do fn() end end

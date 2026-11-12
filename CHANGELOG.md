@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.11.1 (12 Nov 2026)
+- **Fix: the game stalled when the auction house opened.** 0.11.0 read the full scan 2000 lots a frame, fetched an item link for every weapon and armour lot, started over on each of the many list events the game sends while it fills the list, and did all that on top of AuctionDB's own read. Now: nothing at all while AuctionDB is loaded (it shows the fresh lowest lot itself); otherwise one read 3 s after the last list event, 300 lots a frame, weapons and armour left out, paused in combat. `/fmit scan on|off|auto` (auto: only without AuctionDB).
+
 ## 0.11.0 (12 Nov 2026)
 - **Its own full scan, like AuctionDB:** when the auction house opens, FMI Tracker asks the game for a full scan of it (at most every 15 min, the game's own limit), unless AuctionDB is loaded: then AuctionDB asks and both read the same answer. From the scan, per plain item: the lowest lot, the units listed and now also the **real price** (the price at 15% of the listed units) and **FMI 24h** (against the app's market a day before). Kept in `FMITrackerDB.scan` (the latest scan only), so it survives a /reload; the app's data wins whenever it is newer. Still never buys or posts.
 - **No double min with AuctionDB:** while AuctionDB is loaded, FMI min and FMI last seen are left out (AuctionDB shows the lowest lot with its age); the real price then says how old it is. `/fmit min on|off|auto` (auto by default).

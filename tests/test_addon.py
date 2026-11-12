@@ -337,37 +337,66 @@ class Addon(unittest.TestCase):
             '  return "n", 1, r[2], 1, true, 1, 0, 0, 0, r[3], 0, false, nil, "o", "o", 0, r[1], true end; '
             'C_AuctionHouse.GetReplicateItemLink = function(i) return _repl[i + 1][4] end')
 
+    def drain(self):
+        for _ in range(200):
+            if not len(self.lua.eval('_timers')):
+                return
+            self.g.run_timers()
+
     def scan(self, item_id):
         v = self.lua.eval('FMITracker.scan')(item_id)
         return None if v is None else (v[1], v[2], v[3])
 
-    def test_the_full_scan_is_read_in_chunks_lowest_per_unit_and_variants_left_out(self):
+    def test_the_full_scan_is_read_once_lowest_per_unit_gear_left_out(self):
         self.lua.execute(self.REPL)
         self.lua.execute('_t = 3000000; _repl = {{2770, 20, 2400}, {2770, 5, 550}, {2589, 10, 0}, {2589, 2, 120},'
                          '{15000, 1, 9000, "|Hitem:15000::::::1234:::::|h"}, {15001, 1, 7000, "|Hitem:15001:::::::::::|h"}}')
         self.lua.execute('C_Item.GetItemInfoInstant = function(x) if x == 15000 or x == 15001 then return x, "Armor", "Mail", "", 0, 4, 3 end return x end')
-        self.lua.execute('local real = C_AuctionHouse.GetNumReplicateItems; _many = nil')
-        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.lua.execute('_reads = 0; local g = C_AuctionHouse.GetNumReplicateItems; C_AuctionHouse.GetNumReplicateItems = function() _reads = _reads + 1; return g() end')
+        for _ in range(5):
+            self.g.fire('REPLICATE_ITEM_LIST_UPDATE')                   # the game sends it many times while filling
+        self.assertIsNone(self.scan(2770))                              # nothing read yet: waits for the list to settle
+        self.drain()
+        self.assertEqual(self.lua.eval('_reads'), 1)                    # read once, not five times
         self.assertEqual(self.scan(2770), (110, 25, 3000000))           # 550 / 5, all 25 listed
         self.assertEqual(self.scan(2589), (60, 2, 3000000))             # a bid-only lot (buyout 0) left out
-        self.assertIsNone(self.scan(15000))                             # a suffix variant of armour
-        self.assertEqual(self.scan(15001), (7000, 1, 3000000))
+        self.assertIsNone(self.scan(15000))                             # weapons and armour are not read at all
+        self.assertIsNone(self.scan(15001))
 
-    def test_a_big_scan_does_not_finish_in_one_frame(self):
+    def test_a_big_scan_is_spread_over_frames_and_waits_out_combat(self):
         self.lua.execute(self.REPL)
         self.lua.execute('_t = 3000000; for i = 1, 4500 do _repl[i] = {2770, 1, 100 + i} end')
         self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
-        self.assertIsNone(self.scan(2770))                              # 2000 read, the rest waits for the next frames
-        self.g.run_timers()
-        self.g.run_timers()
+        self.g.run_timers()                                             # the 3 s wait
+        self.g.run_timers()                                             # one more frame: still not done
+        self.assertIsNone(self.scan(2770))
+        self.lua.execute('_combat = true')
+        for _ in range(30):
+            self.g.run_timers()
+        self.assertIsNone(self.scan(2770))                              # paused in combat
+        self.lua.execute('_combat = false')
+        self.drain()
         self.assertEqual(self.scan(2770), (101, 4500, 3000000))
+
+    def test_nothing_is_read_next_to_auctiondb_unless_asked(self):
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 3000000; _repl = {{2770, 4, 400}}; C_AddOns = {IsAddOnLoaded = function(n) return n == "AuctionDB" end}')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE'); self.drain()
+        self.assertIsNone(self.scan(2770))
+        self.lua.execute('SlashCmdList["FMITRACKER"]("scan on")')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE'); self.drain()
+        self.assertEqual(self.scan(2770), (100, 4, 3000000))
+        self.lua.execute('C_AddOns = nil; SlashCmdList["FMITRACKER"]("scan off")')
+        self.lua.execute('_t = 3000500; _repl = {{2770, 4, 800}}')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE'); self.drain()
+        self.assertEqual(self.scan(2770), (100, 4, 3000000))            # off: the old scan stays, no new read
 
     def test_the_scan_leads_the_tooltip_until_the_app_data_is_newer(self):
         self.app_data(at_offset=3 * 3600)                               # the app's data was read 3 h ago
         self.lua.execute(self.REPL)
         # 10 lots: 9000 x1 (bait), 13000 x9: 15% of 10 units is reached at the second lot
         self.lua.execute('_t = 2000000; _repl = {{2770, 1, 9000}, {2770, 9, 117000}}')
-        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE'); self.drain()
         self.lua.execute('_t = 2000300')
         self.assertEqual(self.scan(2770), (9000, 10, 2000000))
         got = self.lines(2770)
@@ -383,7 +412,7 @@ class Addon(unittest.TestCase):
         self.lua.execute('FMITrackerAppData["items"][2770][6] = 25')     # app: 12550 now, +25% => 10040 a day before
         self.lua.execute(self.REPL)
         self.lua.execute('_t = 2000000; _repl = {{2770, 10, 110440}}')    # 11044 each = +10% on 10040
-        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE'); self.drain()
         self.assertIn(('FMI 24h', '+10%'), self.lines(2770))
 
     def test_with_auctiondb_loaded_no_min_lines_only_what_it_lacks(self):
@@ -411,7 +440,7 @@ class Addon(unittest.TestCase):
     def test_the_scan_survives_a_reload(self):
         self.lua.execute(self.REPL)
         self.lua.execute('_t = 3000000; _repl = {{2770, 4, 400}}')
-        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE'); self.drain()
         self.lua.execute('FMITrackerAppData = nil')
         self.g.fire('ADDON_LOADED', 'FMITracker')
         self.assertEqual(self.scan(2770), (100, 4, 3000000))

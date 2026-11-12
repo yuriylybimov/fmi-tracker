@@ -1,4 +1,4 @@
--- FMI Tracker 0.11.0
+-- FMI Tracker 0.11.1
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.0"
+local VERSION = "0.11.1"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -646,18 +646,33 @@ end
 -- few bait lots cannot fake it). Kept in FMITrackerDB.scan (the latest scan only), so it also survives a /reload; the
 -- app's data wins whenever it is newer. Nothing is ever bought or posted.
 local SCAN, scanAt, scanGen = {}, nil, 0
-local SCAN_CHUNK = 2000
+-- 0.11.1: the 0.11.0 read stalled the game on a busy house (2000 lots a frame, an item link for every weapon and armour
+-- lot, a fresh restart on every one of the repeated list events, on top of AuctionDB's own read). Now: nothing at all
+-- while AuctionDB is loaded (it shows the fresh lowest lot itself), the read starts 3 s after the last list event, 300
+-- lots a frame, weapons and armour are left out (their suffix variants would need a link each), and it pauses in combat.
+-- /fmit scan off stops it; /fmit scan on reads even next to AuctionDB.
+local SCAN_CHUNK = 300
 local REAL_SHARE = 0.15
 local function ahdbLoaded()
   local fn = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
   return fn and fn("AuctionDB") and true or false
 end
-local function plainScanItem(idx, itemId)
-  local fn = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
-  local classId = fn and select(6, fn(itemId))
-  if classId ~= 2 and classId ~= 4 then return true end           -- only weapons and armour have suffix variants
-  local link = C_AuctionHouse.GetReplicateItemLink and C_AuctionHouse.GetReplicateItemLink(idx)
-  return not isVariant(link)
+local function scanMode() return (DB and DB.opt and DB.opt.scan) or "auto" end
+local function scanWanted()
+  local m = scanMode()
+  if m == "off" then return false end
+  if m == "on" then return true end
+  return not ahdbLoaded()
+end
+local classOf = {}
+local function gearItem(itemId)
+  local c = classOf[itemId]
+  if c == nil then
+    local fn = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    c = (fn and select(6, fn(itemId))) or 0
+    classOf[itemId] = c
+  end
+  return c == 2 or c == 4
 end
 local function summarise(lots)
   table.sort(lots, function(x, y) return x[1] < y[1] end)
@@ -670,25 +685,24 @@ local function summarise(lots)
   end
   return math.floor(lots[1][1] + 0.5), total, math.floor(real + 0.5)
 end
-local function ReadReplicate()
+local function busy() return InCombatLockdown and InCombatLockdown() end
+local function ReadReplicateNow(gen)
   local AH = C_AuctionHouse
+  if gen ~= scanGen or not scanWanted() then return end
   if not (AH and AH.GetNumReplicateItems and AH.GetReplicateItemInfo) then return end
   local n = AH.GetNumReplicateItems() or 0
   if n < 1 then return end
-  scanGen = scanGen + 1
-  local gen, i, acc = scanGen, 0, {}
+  local i, acc = 0, {}
   local function step()
     if gen ~= scanGen then return end                               -- a newer list arrived: that read wins
+    if busy() then C_Timer.After(1, step) return end                -- never during combat
     local last = math.min(n, i + SCAN_CHUNK) - 1
     for idx = i, last do
       local _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemId = AH.GetReplicateItemInfo(idx)
-      if itemId and buyout and buyout > 0 and count and count > 0 then
+      if itemId and buyout and buyout > 0 and count and count > 0 and not gearItem(itemId) then
         local a = acc[itemId]
-        if a == nil then
-          a = plainScanItem(idx, itemId) and {} or false
-          acc[itemId] = a
-        end
-        if a then a[#a + 1] = { buyout / count, count } end
+        if not a then a = {}; acc[itemId] = a end
+        a[#a + 1] = { buyout / count, count }
       end
     end
     i = last + 1
@@ -696,19 +710,24 @@ local function ReadReplicate()
     local t = now()
     SCAN = {}
     for id, lots in pairs(acc) do
-      if lots and #lots > 0 then
-        local low, units, real = summarise(lots)
-        SCAN[id] = { low, units, t, real }
-      end
+      local low, units, real = summarise(lots)
+      SCAN[id] = { low, units, t, real }
     end
     scanAt = t
     if DB then DB.scan = { at = t, items = SCAN } end
   end
   step()
 end
+-- the list event comes many times while the game fills the list: read once, 3 s after the last one
+local function ReadReplicate()
+  if not scanWanted() then return end
+  scanGen = scanGen + 1
+  local gen = scanGen
+  C_Timer.After(3, function() ReadReplicateNow(gen) end)
+end
 local function AskScan()
   local AH = C_AuctionHouse
-  if not (DB and AH and AH.ReplicateItems) or ahdbLoaded() then return end
+  if not (DB and AH and AH.ReplicateItems) or ahdbLoaded() or not scanWanted() then return end
   if now() - (DB.ownScanAt or 0) < 900 then return end
   DB.ownScanAt = now()
   AH.ReplicateItems()
@@ -1067,6 +1086,13 @@ SlashCmdList["FMITRACKER"] = function(msg)
     return
   end
   if msg == "sync" then SaveNow(); return end
+  local sm = msg:match("^scan (%a+)$")
+  if sm == "on" or sm == "off" or sm == "auto" then
+    DB.opt.scan = sm
+    if sm == "off" then scanGen = scanGen + 1 end                   -- stops a read that is running
+    print("|cff66ccffFMI Tracker|r: auction house scan " .. ({ on = "on (also next to AuctionDB)", off = "off", auto = "on only without AuctionDB" })[sm] .. ".")
+    return
+  end
   local mo = msg:match("^min (%a+)$")
   if mo == "on" or mo == "off" or mo == "auto" then
     DB.opt.min = mo
@@ -1087,7 +1113,7 @@ SlashCmdList["FMITRACKER"] = function(msg)
     print("|cff66ccffFMI Tracker|r: save reminder: " .. ({ button = "a button under the mailbox and merchant windows", popup = "a plate after the mailbox or a merchant (at most every 30 min)", off = "off (logout and /fmit save still save)" })[m] .. ".")
     return
   end
-  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save (or sync) writes them and loads the app's prices (reloads the interface); /fmit autosync on|off; /fmit min on|off|auto; /fmit reminder button|popup|off; /fmit tooltip off|on.")
+  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save (or sync) writes them and loads the app's prices (reloads the interface); /fmit autosync on|off; /fmit scan on|off|auto; /fmit min on|off|auto; /fmit reminder button|popup|off; /fmit tooltip off|on.")
   local A = FMITrackerAppData
   if type(A) == "table" and A.items then
     local n = 0

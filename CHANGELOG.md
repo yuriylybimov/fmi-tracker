@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.11.2 (12 Nov 2026)
+- **Its own scan again, whatever else is installed, without the stall.** The stall had one cause: the game sends REPLICATE_ITEM_LIST_UPDATE once with the data and then thousands of times while it loads item info, and 0.11.0 started reading over on every one of them. Now, as AuctionDB does: the auction house opens, FMI Tracker asks for the full scan (at most every 15 min), and only the first list event after that is read; the rest are ignored. If another addon asked first, the same shared answer is read. 1000 lots a frame into flat arrays, weapons and armour left out, paused in combat. `/fmit scan on|off` (the "auto" of 0.11.1 is gone: no dependence on AuctionDB).
+
 ## 0.11.1 (12 Nov 2026)
 - **Fix: the game stalled when the auction house opened.** 0.11.0 read the full scan 2000 lots a frame, fetched an item link for every weapon and armour lot, started over on each of the many list events the game sends while it fills the list, and did all that on top of AuctionDB's own read. Now: nothing at all while AuctionDB is loaded (it shows the fresh lowest lot itself); otherwise one read 3 s after the last list event, 300 lots a frame, weapons and armour left out, paused in combat. `/fmit scan on|off|auto` (auto: only without AuctionDB).
 

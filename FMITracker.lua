@@ -1,4 +1,4 @@
--- FMI Tracker 0.11.1
+-- FMI Tracker 0.11.2
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.1"
+local VERSION = "0.11.2"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -646,24 +646,21 @@ end
 -- few bait lots cannot fake it). Kept in FMITrackerDB.scan (the latest scan only), so it also survives a /reload; the
 -- app's data wins whenever it is newer. Nothing is ever bought or posted.
 local SCAN, scanAt, scanGen = {}, nil, 0
--- 0.11.1: the 0.11.0 read stalled the game on a busy house (2000 lots a frame, an item link for every weapon and armour
--- lot, a fresh restart on every one of the repeated list events, on top of AuctionDB's own read). Now: nothing at all
--- while AuctionDB is loaded (it shows the fresh lowest lot itself), the read starts 3 s after the last list event, 300
--- lots a frame, weapons and armour are left out (their suffix variants would need a link each), and it pauses in combat.
--- /fmit scan off stops it; /fmit scan on reads even next to AuctionDB.
-local SCAN_CHUNK = 300
+-- 0.11.2: FMI Tracker scans on its own, whatever else is installed. When the auction house opens it asks for the full
+-- scan (at most every 15 min, the game's limit) and waits for the answer. The game sends REPLICATE_ITEM_LIST_UPDATE once
+-- with the data and then thousands of times while it loads item info: only the first one after opening is read (0.11.0
+-- started over on every one of them and stalled the game). The list is shared: if another addon asked first, its
+-- answer is read the same way. 1000 lots a frame, flat arrays, weapons and armour left out (their suffix variants would
+-- need an item link each), paused in combat. /fmit scan off switches it off.
+local SCAN_BATCH = 1000
 local REAL_SHARE = 0.15
+local WAIT_TIMEOUT = 60
+local scanState, scanOpenAt = nil, 0                                  -- nil, "waiting", "reading"
 local function ahdbLoaded()
   local fn = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
   return fn and fn("AuctionDB") and true or false
 end
-local function scanMode() return (DB and DB.opt and DB.opt.scan) or "auto" end
-local function scanWanted()
-  local m = scanMode()
-  if m == "off" then return false end
-  if m == "on" then return true end
-  return not ahdbLoaded()
-end
+local function scanOn() return not (DB and DB.opt and DB.opt.scan == "off") end
 local classOf = {}
 local function gearItem(itemId)
   local c = classOf[itemId]
@@ -674,61 +671,75 @@ local function gearItem(itemId)
   end
   return c == 2 or c == 4
 end
-local function summarise(lots)
-  table.sort(lots, function(x, y) return x[1] < y[1] end)
-  local total = 0
-  for _, l in ipairs(lots) do total = total + l[2] end
-  local want, run, real = total * REAL_SHARE, 0, lots[#lots][1]
-  for _, l in ipairs(lots) do
-    run = run + l[2]
-    if run >= want then real = l[1]; break end
-  end
-  return math.floor(lots[1][1] + 0.5), total, math.floor(real + 0.5)
-end
 local function busy() return InCombatLockdown and InCombatLockdown() end
-local function ReadReplicateNow(gen)
+-- per item: lowest unit price, units listed, real price (the price at 15% of the listed units, cheapest first)
+local function summarise(prices, counts)
+  local order = {}
+  for k = 1, #prices do order[k] = k end
+  table.sort(order, function(x, y) return prices[x] < prices[y] end)
+  local total = 0
+  for k = 1, #counts do total = total + counts[k] end
+  local want, run, real = total * REAL_SHARE, 0, prices[order[#order]]
+  for _, k in ipairs(order) do
+    run = run + counts[k]
+    if run >= want then real = prices[k]; break end
+  end
+  return math.floor(prices[order[1]] + 0.5), total, math.floor(real + 0.5)
+end
+local function ReadReplicate()
   local AH = C_AuctionHouse
-  if gen ~= scanGen or not scanWanted() then return end
-  if not (AH and AH.GetNumReplicateItems and AH.GetReplicateItemInfo) then return end
+  if not (AH and AH.GetNumReplicateItems and AH.GetReplicateItemInfo) then scanState = nil return end
   local n = AH.GetNumReplicateItems() or 0
-  if n < 1 then return end
-  local i, acc = 0, {}
+  if n < 1 then scanState = nil return end
+  scanGen = scanGen + 1
+  local gen, i = scanGen, 0
+  local ids, unit, cnt, nl = {}, {}, {}, 0                            -- flat: one entry per lot
   local function step()
-    if gen ~= scanGen then return end                               -- a newer list arrived: that read wins
+    if gen ~= scanGen then return end
     if busy() then C_Timer.After(1, step) return end                -- never during combat
-    local last = math.min(n, i + SCAN_CHUNK) - 1
+    local last = math.min(n, i + SCAN_BATCH) - 1
     for idx = i, last do
       local _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemId = AH.GetReplicateItemInfo(idx)
       if itemId and buyout and buyout > 0 and count and count > 0 and not gearItem(itemId) then
-        local a = acc[itemId]
-        if not a then a = {}; acc[itemId] = a end
-        a[#a + 1] = { buyout / count, count }
+        nl = nl + 1
+        ids[nl], unit[nl], cnt[nl] = itemId, buyout / count, count
       end
     end
     i = last + 1
     if i < n then C_Timer.After(0, step) return end
+    local byP, byC = {}, {}
+    for k = 1, nl do
+      local id = ids[k]
+      local p = byP[id]
+      if not p then p = {}; byP[id] = p; byC[id] = {} end
+      p[#p + 1] = unit[k]
+      byC[id][#byC[id] + 1] = cnt[k]
+    end
     local t = now()
     SCAN = {}
-    for id, lots in pairs(acc) do
-      local low, units, real = summarise(lots)
+    for id, p in pairs(byP) do
+      local low, units, real = summarise(p, byC[id])
       SCAN[id] = { low, units, t, real }
     end
-    scanAt = t
+    scanAt, scanState = t, nil
     if DB then DB.scan = { at = t, items = SCAN } end
   end
   step()
 end
--- the list event comes many times while the game fills the list: read once, 3 s after the last one
-local function ReadReplicate()
-  if not scanWanted() then return end
-  scanGen = scanGen + 1
-  local gen = scanGen
-  C_Timer.After(3, function() ReadReplicateNow(gen) end)
+-- the first list event after the auction house opened (or after our own request) is the data; the rest are not
+local function OnReplicate()
+  if scanState ~= "waiting" or not scanOn() then return end
+  scanState = "reading"
+  ReadReplicate()
 end
 local function AskScan()
+  if not (DB and scanOn()) then return end
   local AH = C_AuctionHouse
-  if not (DB and AH and AH.ReplicateItems) or ahdbLoaded() or not scanWanted() then return end
-  if now() - (DB.ownScanAt or 0) < 900 then return end
+  scanState, scanOpenAt = "waiting", now()
+  local opened = scanOpenAt
+  C_Timer.After(WAIT_TIMEOUT, function() if scanState == "waiting" and scanOpenAt == opened then scanState = nil end end)
+  if not (AH and AH.ReplicateItems) then return end
+  if now() - (DB.ownScanAt or 0) < 900 then return end              -- the game allows one every 15 min
   DB.ownScanAt = now()
   AH.ReplicateItems()
 end
@@ -1022,9 +1033,10 @@ f:SetScript("OnEvent", function(_, event, arg1)
   elseif event == "AUCTION_HOUSE_SHOW" then
     openHost = "ah"
     safe(UpdateSaveButton)
-    if C_Timer and C_Timer.After then C_Timer.After(2, function() safe(AskScan) end) else safe(AskScan) end
+    safe(AskScan)
   elseif event == "AUCTION_HOUSE_CLOSED" then
     if openHost == "ah" then openHost = nil end
+    if scanState == "waiting" then scanState = nil end
     safe(UpdateSaveButton)
     safe(AutoSync)
   elseif event == "PLAYER_REGEN_ENABLED" then
@@ -1071,7 +1083,7 @@ f:SetScript("OnEvent", function(_, event, arg1)
   elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
     safe(ReadItem, arg1)
   elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
-    safe(ReadReplicate)
+    safe(OnReplicate)
   end
 end)
 
@@ -1087,10 +1099,10 @@ SlashCmdList["FMITRACKER"] = function(msg)
   end
   if msg == "sync" then SaveNow(); return end
   local sm = msg:match("^scan (%a+)$")
-  if sm == "on" or sm == "off" or sm == "auto" then
+  if sm == "on" or sm == "off" then
     DB.opt.scan = sm
-    if sm == "off" then scanGen = scanGen + 1 end                   -- stops a read that is running
-    print("|cff66ccffFMI Tracker|r: auction house scan " .. ({ on = "on (also next to AuctionDB)", off = "off", auto = "on only without AuctionDB" })[sm] .. ".")
+    if sm == "off" then scanGen, scanState = scanGen + 1, nil end   -- stops a read that is running
+    print("|cff66ccffFMI Tracker|r: auction house scan " .. sm .. ".")
     return
   end
   local mo = msg:match("^min (%a+)$")
@@ -1113,7 +1125,7 @@ SlashCmdList["FMITRACKER"] = function(msg)
     print("|cff66ccffFMI Tracker|r: save reminder: " .. ({ button = "a button under the mailbox and merchant windows", popup = "a plate after the mailbox or a merchant (at most every 30 min)", off = "off (logout and /fmit save still save)" })[m] .. ".")
     return
   end
-  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save (or sync) writes them and loads the app's prices (reloads the interface); /fmit autosync on|off; /fmit scan on|off|auto; /fmit min on|off|auto; /fmit reminder button|popup|off; /fmit tooltip off|on.")
+  print("|cff66ccffFMI Tracker|r: " .. newN .. " new since the last save. /fmit save (or sync) writes them and loads the app's prices (reloads the interface); /fmit autosync on|off; /fmit scan on|off; /fmit min on|off|auto; /fmit reminder button|popup|off; /fmit tooltip off|on.")
   local A = FMITrackerAppData
   if type(A) == "table" and A.items then
     local n = 0

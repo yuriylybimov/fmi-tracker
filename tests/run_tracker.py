@@ -19,6 +19,7 @@ _timers = {}
 function GetServerTime() return _t end
 function GetTime() return _t end
 function UnitFullName() return "Orakh", "Gorehowl" end
+function UnitFactionGroup() return "Horde", "Horde" end
 function UnitName() return "Orakh" end
 function GetNormalizedRealmName() return "Realm" end
 function UnitLevel() return 12 end

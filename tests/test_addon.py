@@ -371,6 +371,8 @@ class Addon(unittest.TestCase):
         self.assertEqual(self.scan(2589), (60, 2, 3000000))             # a bid-only lot (buyout 0) left out
         self.assertIsNone(self.scan(15000))                             # weapons and armour are not read at all
         self.assertIsNone(self.scan(15001))
+        self.assertEqual(self.lua.eval('FMITrackerDB.scan.faction'), 'Horde')   # 0.11.3: the side, for the app's price check
+        self.assertTrue(self.lua.eval('FMITrackerDB.scan.char'))
 
     def test_a_big_scan_is_spread_over_frames_and_waits_out_combat(self):
         self.lua.execute(self.REPL)

@@ -2,7 +2,7 @@
 ## Title: FMI Tracker
 ## Notes: Records what only the game knows (auction mail invoices, vendor trades, repairs, flights, trainers) and shows in item tooltips the auction prices you see (live) and prices and demand from the Market Intelligence app. Never searches, buys or posts.
 ## Author: Market Intelligence (personal)
-## Version: 0.11.2
+## Version: 0.11.3
 ## Category: Auction & Economy
 ## IconTexture: Interface\Icons\INV_Misc_Coin_02
 ## SavedVariables: FMITrackerDB

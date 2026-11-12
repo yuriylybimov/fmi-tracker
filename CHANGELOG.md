@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.11.3 (12 Nov 2026)
+- The saved scan also says which character made it and on which side (`FMITrackerDB.scan.char`, `.faction`), so the Market Intelligence app can check the game's prices against the API of the right auction house (the app's Data page, "API prices against the game").
+
 ## 0.11.2 (12 Nov 2026)
 - **Its own scan again, whatever else is installed, without the stall.** The stall had one cause: the game sends REPLICATE_ITEM_LIST_UPDATE once with the data and then thousands of times while it loads item info, and 0.11.0 started reading over on every one of them. Now, as AuctionDB does: the auction house opens, FMI Tracker asks for the full scan (at most every 15 min), and only the first list event after that is read; the rest are ignored. If another addon asked first, the same shared answer is read. 1000 lots a frame into flat arrays, weapons and armour left out, paused in combat. `/fmit scan on|off` (the "auto" of 0.11.1 is gone: no dependence on AuctionDB).
 

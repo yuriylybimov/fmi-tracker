@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.2"
+local VERSION = "0.11.3"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -722,7 +722,9 @@ local function ReadReplicate()
       SCAN[id] = { low, units, t, real }
     end
     scanAt, scanState = t, nil
-    if DB then DB.scan = { at = t, items = SCAN } end
+    -- 0.11.3: who scanned which side, so the app can check the scan against the right API house (price_check.py)
+    local faction = UnitFactionGroup and UnitFactionGroup("player") or nil
+    if DB then DB.scan = { at = t, items = SCAN, char = char, faction = faction } end
   end
   step()
 end

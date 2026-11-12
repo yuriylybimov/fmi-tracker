@@ -655,7 +655,7 @@ local SCAN, scanAt, scanGen = {}, nil, 0
 local SCAN_BATCH = 1000
 local REAL_SHARE = 0.15
 local WAIT_TIMEOUT = 60
-local scanState, scanOpenAt = nil, 0                                  -- nil, "waiting", "reading"
+local scanState, scanOpenAt, scanHouse = nil, 0, nil                                  -- nil, "waiting", "reading"
 local function ahdbLoaded()
   local fn = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
   return fn and fn("AuctionDB") and true or false
@@ -723,8 +723,7 @@ local function ReadReplicate()
     end
     scanAt, scanState = t, nil
     -- 0.11.3: who scanned which side, so the app can check the scan against the right API house (price_check.py)
-    local faction = UnitFactionGroup and UnitFactionGroup("player") or nil
-    if DB then DB.scan = { at = t, items = SCAN, char = char, faction = faction } end
+    if DB then DB.scan = { at = t, items = SCAN, char = char, faction = scanHouse } end
   end
   step()
 end
@@ -736,6 +735,8 @@ local function OnReplicate()
 end
 local function AskScan()
   if not (DB and scanOn()) then return end
+  -- the auctioneer's side, as AuctionDB reads it: Alliance, Horde, or Neutral for the goblin auction houses
+  scanHouse = (UnitFactionGroup and UnitFactionGroup("npc")) or "Neutral"
   local AH = C_AuctionHouse
   scanState, scanOpenAt = "waiting", now()
   local opened = scanOpenAt

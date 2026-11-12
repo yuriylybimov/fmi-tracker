@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.0 (12 Nov 2026)
+- **Fresh prices when the auction house opens:** AuctionDB (AHDB) asks the game for a full scan of the house when you open it; FMI Tracker now reads the same answer (REPLICATE_ITEM_LIST_UPDATE), without asking for anything itself: the lowest buyout per unit and the listed quantity of every plain item, in chunks of 2000 lots per frame so the game does not stall. The tooltip then shows **FMI min (in game, 2 min ago, 758 listed)** instead of the app's older min; FMI real price keeps the app's age in brackets. After a /reload the app's data (rewritten every few minutes) leads again. Kept in memory only. Without an addon that scans, nothing changes.
+- **Every item tooltip,** not only the main one: the profession window and other frames now get the FMI lines too (the side-by-side comparison tooltips do not).
+- Tests: 4 new (scan read in chunks with variants left out, a 4500-lot scan over several frames, scan against app data in the tooltip, the tooltip hook).
+
 ## 0.9.0 (10 Nov 2026)
 - Tooltip prices named by what they are:
   - **FMI last seen (7 min ago, 267 listed)**: the cheapest lot you saw yourself on the auction house (was "FMI AH now"); now shown for 24 h, also when the app's data is newer.

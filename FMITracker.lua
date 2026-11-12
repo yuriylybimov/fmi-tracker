@@ -1,4 +1,4 @@
--- FMI Tracker 0.9.0
+-- FMI Tracker 0.10.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.9.0"
+local VERSION = "0.10.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -601,6 +601,54 @@ local function ReadItem(itemKey)
   if low then Seen(itemKey.itemID, low, qty) end
 end
 
+-- ---------------------------------------------------------------- the full scan another addon asked for (0.10.0)
+-- AuctionDB (AHDB) and others ask the game for the whole auction house (C_AuctionHouse.ReplicateItems) when it opens.
+-- The answer is one list any addon can read; REPLICATE_ITEM_LIST_UPDATE says it is there. FMI Tracker reads it too,
+-- without asking for anything itself: the lowest buyout per unit and the listed quantity of every plain item, in
+-- chunks so the game does not stall. Kept in memory only (SCAN), so the tooltip is fresh from the moment the house
+-- was scanned; after a /reload the app's data (rewritten every few minutes) is newer anyway.
+local SCAN, scanAt, scanGen = {}, nil, 0
+local SCAN_CHUNK = 2000
+local function plainScanItem(idx, itemId)
+  local fn = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+  local classId = fn and select(6, fn(itemId))
+  if classId ~= 2 and classId ~= 4 then return true end           -- only weapons and armour have suffix variants
+  local link = C_AuctionHouse.GetReplicateItemLink and C_AuctionHouse.GetReplicateItemLink(idx)
+  return not isVariant(link)
+end
+local function ReadReplicate()
+  local AH = C_AuctionHouse
+  if not (AH and AH.GetNumReplicateItems and AH.GetReplicateItemInfo) then return end
+  local n = AH.GetNumReplicateItems() or 0
+  if n < 1 then return end
+  scanGen = scanGen + 1
+  local gen, i, acc = scanGen, 0, {}
+  local function step()
+    if gen ~= scanGen then return end                               -- a newer list arrived: that read wins
+    local last = math.min(n, i + SCAN_CHUNK) - 1
+    for idx = i, last do
+      local _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemId = AH.GetReplicateItemInfo(idx)
+      if itemId and buyout and buyout > 0 and count and count > 0 then
+        local unit = buyout / count
+        local a = acc[itemId]
+        if a == nil then
+          if plainScanItem(idx, itemId) then acc[itemId] = { unit, count } else acc[itemId] = false end
+        elseif a then
+          if unit < a[1] then a[1] = unit end
+          a[2] = a[2] + count
+        end
+      end
+    end
+    i = last + 1
+    if i < n then C_Timer.After(0, step) return end
+    local t = now()
+    SCAN = {}
+    for id, a in pairs(acc) do if a then SCAN[id] = { math.floor(a[1] + 0.5), a[2], t } end end
+    scanAt = t
+  end
+  step()
+end
+
 -- ---------------------------------------------------------------- tooltip lines from the app (0.5.0)
 -- FMITrackerAppData comes from the addon FMITracker_Data that the Market Intelligence app writes into the AddOns folder
 -- (read by the game at login or /reload). items[id] = {market, min, units, tier, perDay}; sold/bought[id] = {unit, ts}.
@@ -642,10 +690,18 @@ local function TooltipLines(itemId, link)
   local it = (not variant) and A.items and A.items[itemId]
   local lv = (not variant) and DB and DB.live and DB.live[itemId]
   if lv and now() - lv[3] >= 24 * 3600 then lv = nil end
+  -- 0.10.0: a full scan of the house in this session (read from another addon's scan) beats both older readings
+  local sc = (not variant) and scanAt and SCAN[itemId]
+  if sc and lv and lv[3] > sc[3] then sc = nil end                -- what you searched after the scan is newer
+  if sc then lv = nil end
   local s, b = A.sold and A.sold[itemId], A.bought and A.bought[itemId]
   local out = {}
   if lv then
     out[#out + 1] = { "FMI last seen (" .. agoText(lv[3]) .. ((lv[2] or 0) > 0 and (", " .. lv[2] .. " listed") or "") .. ")", coins(lv[1]) }
+  end
+  local appNewer = it and A.at and (not sc or A.at > sc[3])
+  if sc and not appNewer then
+    out[#out + 1] = { "FMI min (in game, " .. agoText(sc[3]) .. ", " .. sc[2] .. " listed)", coins(sc[1]) }
   end
   if it then
     local market, min, units, tier, perDay, change = it[1], it[2], it[3], it[4], it[5], it[6]
@@ -657,8 +713,12 @@ local function TooltipLines(itemId, link)
     -- 0.9.0: the lowest lot of the whole auction house, then the real price (the price at 15% of the listed units,
     -- cheapest first: a few bait lots cannot fake it) only when it is at least 3% above the lowest lot.
     local low = min or market
-    if low then out[#out + 1] = { "FMI min" .. (#info > 0 and (" (" .. table.concat(info, ", ") .. ")") or ""), coins(low) } end
-    if market and min and market >= min * 1.03 then out[#out + 1] = { "FMI real price", coins(market) } end
+    if low and (appNewer or not sc) then
+      out[#out + 1] = { "FMI min" .. (#info > 0 and (" (" .. table.concat(info, ", ") .. ")") or ""), coins(low) }
+    end
+    if market and min and market >= min * 1.03 then
+      out[#out + 1] = { "FMI real price" .. ((sc and not appNewer) and (" (" .. agoText(A.at) .. ")") or ""), coins(market) }
+    end
     if change then out[#out + 1] = { "FMI 24h", pct(change) } end
     if tier and TIER[tier] then
       out[#out + 1] = { "FMI demand", TIER[tier] .. ((perDay and perDay > 0) and (" · ~" .. math.floor(perDay + 0.5) .. "/day") or "") }
@@ -680,7 +740,10 @@ local function HookTooltips()
   hooked = true
   if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tt, data)
-      if tt ~= GameTooltip and tt ~= ItemRefTooltip then return end
+      -- 0.10.0: every item tooltip (the profession window, other addons' frames), only the side-by-side comparison
+      -- tooltips are left out
+      if not (tt and tt.AddDoubleLine) or tt == ShoppingTooltip1 or tt == ShoppingTooltip2 then return end
+      if data and data.type and Enum.TooltipDataType.Item and data.type ~= Enum.TooltipDataType.Item then return end
       local link
       if tt.GetItem then local _, l = tt:GetItem(); link = l end
       safe(AddLines, tt, (data and data.id) or itemIdOf(link), link)
@@ -693,6 +756,7 @@ local function HookTooltips()
 end
 FMITracker.tooltipLines = TooltipLines
 FMITracker.live = function(itemId) return DB and DB.live and DB.live[itemId] end
+FMITracker.scan = function(itemId) return SCAN[itemId] end
 
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
@@ -710,6 +774,7 @@ f:RegisterEvent("BANKFRAME_OPENED")
 f:RegisterEvent("BANKFRAME_CLOSED")
 f:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
 pcall(f.RegisterEvent, f, "BANK_TABS_CHANGED")       -- not on every client
+pcall(f.RegisterEvent, f, "REPLICATE_ITEM_LIST_UPDATE")
 for _, e in ipairs({ "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED", "COMMODITY_SEARCH_RESULTS_UPDATED",
                      "ITEM_SEARCH_RESULTS_UPDATED" }) do pcall(f.RegisterEvent, f, e) end   -- the modern auction house only
 
@@ -791,6 +856,8 @@ f:SetScript("OnEvent", function(_, event, arg1)
     safe(ReadCommodity, arg1)
   elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
     safe(ReadItem, arg1)
+  elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
+    safe(ReadReplicate)
   end
 end)
 

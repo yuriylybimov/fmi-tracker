@@ -330,6 +330,69 @@ class Addon(unittest.TestCase):
         self.lua.execute('_t = 3000000 + 25 * 3600')
         self.assertEqual(self.lines(2770), [])                                # older than a day: hidden
 
+    # ------------------------------------------------------------ the full scan another addon asked for (0.10.0)
+    REPL = ('_repl = {}; C_AuctionHouse = C_AuctionHouse or {}; '
+            'C_AuctionHouse.GetNumReplicateItems = function() return #_repl end; '
+            'C_AuctionHouse.GetReplicateItemInfo = function(i) local r = _repl[i + 1]; '
+            '  return "n", 1, r[2], 1, true, 1, 0, 0, 0, r[3], 0, false, nil, "o", "o", 0, r[1], true end; '
+            'C_AuctionHouse.GetReplicateItemLink = function(i) return _repl[i + 1][4] end')
+
+    def scan(self, item_id):
+        v = self.lua.eval('FMITracker.scan')(item_id)
+        return None if v is None else (v[1], v[2], v[3])
+
+    def test_the_full_scan_is_read_in_chunks_lowest_per_unit_and_variants_left_out(self):
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 3000000; _repl = {{2770, 20, 2400}, {2770, 5, 550}, {2589, 10, 0}, {2589, 2, 120},'
+                         '{15000, 1, 9000, "|Hitem:15000::::::1234:::::|h"}, {15001, 1, 7000, "|Hitem:15001:::::::::::|h"}}')
+        self.lua.execute('C_Item.GetItemInfoInstant = function(x) if x == 15000 or x == 15001 then return x, "Armor", "Mail", "", 0, 4, 3 end return x end')
+        self.lua.execute('local real = C_AuctionHouse.GetNumReplicateItems; _many = nil')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.assertEqual(self.scan(2770), (110, 25, 3000000))           # 550 / 5, all 25 listed
+        self.assertEqual(self.scan(2589), (60, 2, 3000000))             # a bid-only lot (buyout 0) left out
+        self.assertIsNone(self.scan(15000))                             # a suffix variant of armour
+        self.assertEqual(self.scan(15001), (7000, 1, 3000000))
+
+    def test_a_big_scan_does_not_finish_in_one_frame(self):
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 3000000; for i = 1, 4500 do _repl[i] = {2770, 1, 100 + i} end')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.assertIsNone(self.scan(2770))                              # 2000 read, the rest waits for the next frames
+        self.g.run_timers()
+        self.g.run_timers()
+        self.assertEqual(self.scan(2770), (101, 4500, 3000000))
+
+    def test_the_scan_leads_the_tooltip_until_the_app_data_is_newer(self):
+        self.app_data(at_offset=3 * 3600)                               # the app's data was read 3 h ago
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 2000000; _repl = {{2770, 10, 9000}}')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.lua.execute('_t = 2000300')
+        got = self.lines(2770)
+        self.assertEqual(got[0], ('FMI min (in game, 5 min ago, 10 listed)', '9s'))
+        self.assertFalse([l for l in got if l[0].startswith('FMI min (')][1:])   # no second, older min line
+        self.assertEqual(got[1], ('FMI real price (3 h ago)', '1g 25s 50c'))      # the app's, with its age
+        self.assertIn(('FMI demand', 'sells fast · ~42/day'), got)
+        self.lua.execute('FMITrackerAppData["at"] = 2000200')            # after a reload the app's data is newer again
+        self.assertEqual(self.lines(2770)[0], ('FMI min (1 min ago, 300 listed)', '1g 10s'))
+
+    def test_every_item_tooltip_gets_the_lines_but_not_the_comparison_ones(self):
+        lua, g = R.LuaRuntime(unpack_returned_tuples=True), None
+        lua.execute(R.PRELUDE)
+        lua.execute('Enum.TooltipDataType = {Item = 0}; _post = nil; '
+                    'TooltipDataProcessor = {AddTooltipPostCall = function(kind, fn) _post = fn end}; '
+                    'GameTooltip = {}; ShoppingTooltip1 = {}; '
+                    'function tip() local t = {n = 0}; t.AddDoubleLine = function(self) self.n = self.n + 1 end; '
+                    '  t.AddLine = t.AddDoubleLine; t.GetItem = function() return "x", nil end; return t end')
+        lua.execute('FMITrackerDB = nil')
+        lua.execute(R.SRC.replace('local ADDON = ...', ''))
+        g = lua.globals()
+        g.fire('ADDON_LOADED', 'FMITracker')
+        g.fire('PLAYER_LOGIN')
+        lua.execute('FMITrackerAppData = {["at"] = 1000000, ["items"] = {[3840] = {2788, 2788, 85, 1, 12.8, -7}}}')
+        self.assertEqual(lua.eval('(function() local t = tip(); _post(t, {id = 3840, type = 0}); return t.n end)()'), 3)
+        self.assertEqual(lua.eval('(function() local t = tip(); ShoppingTooltip1 = t; _post(t, {id = 3840, type = 0}); return t.n end)()'), 0)
+
     # ------------------------------------------------------------ quiet saving (0.7.0)
     def btn(self):
         return bool(self.lua.eval('FMITracker.buttonShown()'))

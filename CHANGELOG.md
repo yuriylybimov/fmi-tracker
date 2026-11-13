@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.5 (13 Nov 2026)
+- **Reads as fast as the frame allows:** each frame reads lots for 8 ms instead of a fixed 1000, so a 300,000-lot scan takes about as long as AuctionDB's (0.11.4 had read 24% when AuctionDB was done).
+- **Closing the auction house no longer cuts the scan** while the game still holds the list (AuctionDB reads on the same way); only when the list is gone or shrank is the scan dropped, as before never saved half.
+
 ## 0.11.4 (13 Nov 2026)
 - **One chat line when the auction house scan is read**, like AuctionDB's: "auction house read: 299,305 lots of 28,000 items in 4.8 s". Then you know you can close it. `/fmit scanmsg off` hides it.
 - **A cut scan is never saved:** if the auction house closes before the list was read, the read stops, a chat line says how far it got, and the last complete scan stays (the scan of 12 Nov held 539 items: it was cut, and the app's price check could not use it).

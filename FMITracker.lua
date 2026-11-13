@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.4"
+local VERSION = "0.11.5"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -686,6 +686,7 @@ local function summarise(prices, counts)
   end
   return math.floor(prices[order[1]] + 0.5), total, math.floor(real + 0.5)
 end
+local SCAN_MS = 8                                                     -- 0.11.5: work per frame, in milliseconds
 local function ReadReplicate()
   local AH = C_AuctionHouse
   if not (AH and AH.GetNumReplicateItems and AH.GetReplicateItemInfo) then scanState = nil return end
@@ -694,30 +695,39 @@ local function ReadReplicate()
   scanGen = scanGen + 1
   local gen, i = scanGen, 0
   local started = GetTime and GetTime() or 0
-  local ids, unit, cnt, nl = {}, {}, {}, 0                            -- flat: one entry per lot
+  local clock = debugprofilestop                                      -- ms; nil outside the game (tests): fixed batches
+  local ids, unit, cnt, nl, missing = {}, {}, {}, 0, 0                -- flat: one entry per lot
+  local function cut()
+    scanState = nil
+    if not (DB and DB.opt and DB.opt.scanmsg == false) then
+      print("|cff66ccffFMI Tracker|r: the auction house list went away before the scan was read (" .. math.floor(100 * i / n) ..
+            "%): not saved. Keep the auction house open until this line says it is read.")
+    end
+  end
   local function step()
     if gen ~= scanGen then return end
-    if openHost ~= "ah" then
-      -- 0.11.4: the list goes away with the auction house window: a cut scan is never saved (it once held 539 of
-      -- ~30,000 items and made the app's price check meaningless)
-      scanState = nil
-      if not (DB and DB.opt and DB.opt.scanmsg == false) then
-        print("|cff66ccffFMI Tracker|r: auction house closed before the scan was read (" .. math.floor(100 * i / n) ..
-              "%): not saved. Keep it open a few seconds next time.")
-      end
-      return
-    end
+    -- 0.11.5: closing the window does not stop the read while the game still holds the list (AuctionDB reads on too);
+    -- only a list that is gone or shrank cuts it, and a cut scan is never saved
+    if openHost ~= "ah" and (AH.GetNumReplicateItems() or 0) ~= n then cut() return end
     if busy() then C_Timer.After(1, step) return end                -- never during combat
-    local last = math.min(n, i + SCAN_BATCH) - 1
-    for idx = i, last do
+    -- 0.11.5: as many lots as fit in SCAN_MS of this frame (AuctionDB's whole read takes about a second)
+    local stop = clock and (clock() + SCAN_MS) or nil
+    local last = stop and (n - 1) or (math.min(n, i + SCAN_BATCH) - 1)
+    local idx = i
+    while idx <= last do
       local _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemId = AH.GetReplicateItemInfo(idx)
-      if itemId and buyout and buyout > 0 and count and count > 0 and not gearItem(itemId) then
+      if not itemId then
+        missing = missing + 1
+      elseif buyout and buyout > 0 and count and count > 0 and not gearItem(itemId) then
         nl = nl + 1
         ids[nl], unit[nl], cnt[nl] = itemId, buyout / count, count
       end
+      idx = idx + 1
+      if stop and idx % 200 == 0 and clock() > stop then break end
     end
-    i = last + 1
+    i = idx
     if i < n then C_Timer.After(0, step) return end
+    if missing > n * 0.05 then cut() return end                       -- the list emptied under us
     local byP, byC = {}, {}
     for k = 1, nl do
       local id = ids[k]

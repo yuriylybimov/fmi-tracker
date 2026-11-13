@@ -397,16 +397,43 @@ class Addon(unittest.TestCase):
         self.drain()
         said = self.lua.eval('_said[#_said]')
         self.assertIn('auction house read: 4500 lots of 1 items', said)
-        # a second scan, closed after the first frame: the first scan stays, a line says it was cut
+        # 0.11.5: closing the window while the game still holds the list: the read goes on and is saved
         self.lua.execute('_t = 3005000; for i = 1, 4500 do _repl[i] = {2589, 1, 50} end; FMITrackerDB.ownScanAt = 0')
         self.g.fire('AUCTION_HOUSE_CLOSED')
         self.g.fire('AUCTION_HOUSE_SHOW')
         self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
         self.g.fire('AUCTION_HOUSE_CLOSED')
         self.drain()
+        self.assertEqual(self.scan(2589), (50, 4500, 3005000))
+        # ... but when the list goes away with it, nothing of the cut scan is saved
+        self.lua.execute('_t = 3010000; for i = 1, 4500 do _repl[i] = {2840, 1, 70} end; FMITrackerDB.ownScanAt = 0')
+        self.g.fire('AUCTION_HOUSE_CLOSED')
+        self.g.fire('AUCTION_HOUSE_SHOW')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.g.fire('AUCTION_HOUSE_CLOSED')
+        self.lua.execute('_repl = {}')
+        self.drain()
+        self.assertIsNone(self.scan(2840))
+        self.assertEqual(self.scan(2589), (50, 4500, 3005000))
+        self.assertIn('went away before the scan was read', self.lua.eval('_said[#_said]'))
+
+    def test_in_the_game_a_frame_reads_as_many_lots_as_fit_in_its_time(self):
+        # 0.11.5: with debugprofilestop (the game's clock in ms) the read is bound by time, not by 1000 lots
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 3000000; for i = 1, 4500 do _repl[i] = {2770, 1, 100 + i} end')
+        self.lua.execute('_ms = 0; debugprofilestop = function() _ms = _ms + 0.01; return _ms end')
+        self.g.fire('AUCTION_HOUSE_SHOW')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')                       # all 4500 in this one frame (8 ms budget)
         self.assertEqual(self.scan(2770), (101, 4500, 3000000))
+        self.lua.execute('_ms = 0; debugprofilestop = function() _ms = _ms + 1; return _ms end')
+        self.lua.execute('_t = 3005000; for i = 1, 4500 do _repl[i] = {2589, 1, 50} end; FMITrackerDB.ownScanAt = 0')
+        self.g.fire('AUCTION_HOUSE_CLOSED')
+        self.g.fire('AUCTION_HOUSE_SHOW')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')                       # a slow frame: 1 ms a call, stops after 8 ms
         self.assertIsNone(self.scan(2589))
-        self.assertIn('closed before the scan was read', self.lua.eval('_said[#_said]'))
+        self.drain()
+        self.assertEqual(self.scan(2589), (50, 4500, 3005000))
+        self.lua.execute('debugprofilestop = nil')
 
     def test_it_scans_on_its_own_also_next_to_auctiondb_and_can_be_switched_off(self):
         self.lua.execute(self.REPL)

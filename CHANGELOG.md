@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.11.8 (13 Nov 2026)
+- **Reads a big auction house faster and says to keep it open.** The game drops the auction house list when the window closes (in the log the read stopped at 45% right after closing, before any reload), so a read cannot go on without the window. It now works 20 ms a frame instead of 8 (0.11.7 still holds: the automatic reload waits for a read that is running), and a line at the start tells you to keep the window open until "scan done".
+
 ## 0.11.7 (13 Nov 2026)
 - **The automatic save no longer cuts a scan that is being read.** Closing the auction house started the reload 1 s later; on a big house (Forever, 215,000 lots) the read was still running and stopped at 45%, so the scan was not saved. Now the reload waits until the read is done (at most 2 minutes), and the full scan is saved first.
 - **The line when the scan is done says so:** "scan done, you can close the auction house. Read 215,771 lots of ..." (green), instead of the technical "auction house read".

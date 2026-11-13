@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.7"
+local VERSION = "0.11.8"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -694,7 +694,7 @@ local function summarise(prices, counts)
   end
   return math.floor(prices[order[1]] + 0.5), total, math.floor(real + 0.5)
 end
-local SCAN_MS = 8                                                     -- 0.11.5: work per frame, in milliseconds
+local SCAN_MS = 20                                                    -- work per frame, in milliseconds (0.11.5: 8; 0.11.8: 20, the read of 215,000 Forever lots was cut at 45%)
 local function ReadReplicate()
   local AH = C_AuctionHouse
   if not (AH and AH.GetNumReplicateItems and AH.GetReplicateItemInfo) then scanState = nil return end
@@ -705,6 +705,10 @@ local function ReadReplicate()
   local started = GetTime and GetTime() or 0
   local clock = debugprofilestop                                      -- ms; nil outside the game (tests): fixed batches
   local ids, unit, cnt, nl, missing = {}, {}, {}, 0, 0                -- flat: one entry per lot
+  -- 0.11.8: the game drops the list when the window closes, so a big read needs the window open: say so at the start
+  if n >= 20000 and not (DB and DB.opt and DB.opt.scanmsg == false) then
+    print("|cff66ccffFMI Tracker|r: reading " .. n .. " lots, keep the auction house open until it says the scan is done.")
+  end
   local function cut()
     scanState = nil
     if not (DB and DB.opt and DB.opt.scanmsg == false) then

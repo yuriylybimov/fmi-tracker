@@ -758,7 +758,7 @@ local function ReadReplicate()
       local items = 0
       for _ in pairs(SCAN) do items = items + 1 end
       local secs = (GetTime and GetTime() or started) - started
-      print(string.format("|cff66ccffFMI Tracker|r: auction house read: %d lots of %d items in %.1f s (weapons and armour left out). The app gets it at the next save.",
+      print(string.format("|cff66ccffFMI Tracker|r: |cff40ff40scan done, you can close the auction house.|r Read %d lots of %d items in %.1f s (weapons and armour left out). The app gets it at the next save.",
         nl, items, secs))
     end
   end

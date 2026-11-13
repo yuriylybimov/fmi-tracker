@@ -396,7 +396,7 @@ class Addon(unittest.TestCase):
         self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
         self.drain()
         said = self.lua.eval('_said[#_said]')
-        self.assertIn('auction house read: 4500 lots of 1 items', said)
+        self.assertIn('scan done, you can close the auction house.|r Read 4500 lots of 1 items', said)
         # 0.11.5: closing the window while the game still holds the list: the read goes on and is saved
         self.lua.execute('_t = 3005000; for i = 1, 4500 do _repl[i] = {2589, 1, 50} end; FMITrackerDB.ownScanAt = 0')
         self.g.fire('AUCTION_HOUSE_CLOSED')

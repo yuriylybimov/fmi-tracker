@@ -2,6 +2,7 @@
 
 ## 0.11.7 (13 Nov 2026)
 - **The automatic save no longer cuts a scan that is being read.** Closing the auction house started the reload 1 s later; on a big house (Forever, 215,000 lots) the read was still running and stopped at 45%, so the scan was not saved. Now the reload waits until the read is done (at most 2 minutes), and the full scan is saved first.
+- **The line when the scan is done says so:** "scan done, you can close the auction house. Read 215,771 lots of ..." (green), instead of the technical "auction house read".
 
 ## 0.11.6 (13 Nov 2026)
 - **FMI real price always shows next to AuctionDB.** With FMI min hidden (AuctionDB loaded), the real price was still left out when it was within 3% of the min, so an item like Coal (5s 40c min, 5s 55c real) showed no FMI price at all. The 3% rule now applies only when FMI min is shown.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.4 (13 Nov 2026)
+- **One chat line when the auction house scan is read**, like AuctionDB's: "auction house read: 299,305 lots of 28,000 items in 4.8 s". Then you know you can close it. `/fmit scanmsg off` hides it.
+- **A cut scan is never saved:** if the auction house closes before the list was read, the read stops, a chat line says how far it got, and the last complete scan stays (the scan of 12 Nov held 539 items: it was cut, and the app's price check could not use it).
+
 ## 0.11.3 (12 Nov 2026)
 - The saved scan also says which character made it and on which side (`FMITrackerDB.scan.char`, `.faction`), so the Market Intelligence app can check the game's prices against the API of the right auction house (the app's Data page, "API prices against the game").
 

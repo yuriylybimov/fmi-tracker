@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.3"
+local VERSION = "0.11.4"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -693,9 +693,20 @@ local function ReadReplicate()
   if n < 1 then scanState = nil return end
   scanGen = scanGen + 1
   local gen, i = scanGen, 0
+  local started = GetTime and GetTime() or 0
   local ids, unit, cnt, nl = {}, {}, {}, 0                            -- flat: one entry per lot
   local function step()
     if gen ~= scanGen then return end
+    if openHost ~= "ah" then
+      -- 0.11.4: the list goes away with the auction house window: a cut scan is never saved (it once held 539 of
+      -- ~30,000 items and made the app's price check meaningless)
+      scanState = nil
+      if not (DB and DB.opt and DB.opt.scanmsg == false) then
+        print("|cff66ccffFMI Tracker|r: auction house closed before the scan was read (" .. math.floor(100 * i / n) ..
+              "%): not saved. Keep it open a few seconds next time.")
+      end
+      return
+    end
     if busy() then C_Timer.After(1, step) return end                -- never during combat
     local last = math.min(n, i + SCAN_BATCH) - 1
     for idx = i, last do
@@ -724,6 +735,14 @@ local function ReadReplicate()
     scanAt, scanState = t, nil
     -- 0.11.3: who scanned which side, so the app can check the scan against the right API house (price_check.py)
     if DB then DB.scan = { at = t, items = SCAN, char = char, faction = scanHouse } end
+    -- 0.11.4: one line when it is done, like AuctionDB's (the owner likes to know the auction house can be closed)
+    if not (DB and DB.opt and DB.opt.scanmsg == false) then
+      local items = 0
+      for _ in pairs(SCAN) do items = items + 1 end
+      local secs = (GetTime and GetTime() or started) - started
+      print(string.format("|cff66ccffFMI Tracker|r: auction house read: %d lots of %d items in %.1f s (weapons and armour left out). The app gets it at the next save.",
+        nl, items, secs))
+    end
   end
   step()
 end
@@ -1101,6 +1120,11 @@ SlashCmdList["FMITRACKER"] = function(msg)
     return
   end
   if msg == "sync" then SaveNow(); return end
+  if msg == "scanmsg off" or msg == "scanmsg on" then
+    DB.opt.scanmsg = (msg == "scanmsg on")
+    print("|cff66ccffFMI Tracker|r: the line after an auction house scan is " .. (DB.opt.scanmsg and "on" or "off") .. ".")
+    return
+  end
   local sm = msg:match("^scan (%a+)$")
   if sm == "on" or sm == "off" then
     DB.opt.scan = sm

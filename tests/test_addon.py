@@ -388,6 +388,26 @@ class Addon(unittest.TestCase):
         self.drain()
         self.assertEqual(self.scan(2770), (101, 4500, 3000000))
 
+    def test_a_line_when_done_and_a_closed_auction_house_cuts_nothing_into_the_saved_scan(self):
+        # 0.11.4
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 3000000; for i = 1, 4500 do _repl[i] = {2770, 1, 100 + i} end')
+        self.g.fire('AUCTION_HOUSE_SHOW')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.drain()
+        said = self.lua.eval('_said[#_said]')
+        self.assertIn('auction house read: 4500 lots of 1 items', said)
+        # a second scan, closed after the first frame: the first scan stays, a line says it was cut
+        self.lua.execute('_t = 3005000; for i = 1, 4500 do _repl[i] = {2589, 1, 50} end; FMITrackerDB.ownScanAt = 0')
+        self.g.fire('AUCTION_HOUSE_CLOSED')
+        self.g.fire('AUCTION_HOUSE_SHOW')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
+        self.g.fire('AUCTION_HOUSE_CLOSED')
+        self.drain()
+        self.assertEqual(self.scan(2770), (101, 4500, 3000000))
+        self.assertIsNone(self.scan(2589))
+        self.assertIn('closed before the scan was read', self.lua.eval('_said[#_said]'))
+
     def test_it_scans_on_its_own_also_next_to_auctiondb_and_can_be_switched_off(self):
         self.lua.execute(self.REPL)
         self.lua.execute('_asked = 0; C_AuctionHouse.ReplicateItems = function() _asked = _asked + 1 end')

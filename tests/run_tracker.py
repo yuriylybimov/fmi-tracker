@@ -25,7 +25,8 @@ function GetNormalizedRealmName() return "Realm" end
 function UnitLevel() return 12 end
 function UnitClass() return "Warrior", "WARRIOR" end
 function GetMoney() return _money end
-function print(...) end
+_said = {}
+function print(...) local t = {} for i = 1, select('#', ...) do t[#t + 1] = tostring(select(i, ...)) end _said[#_said + 1] = table.concat(t, ' ') end
 AUCTION_WON_MAIL_SUBJECT = "Auction won: %s"
 AUCTION_SOLD_MAIL_SUBJECT = "Auction successful: %s"
 C_Timer = { After = function(sec, fn) table.insert(_timers, fn) end }

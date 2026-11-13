@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.5"
+local VERSION = "0.11.6"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -848,7 +848,9 @@ local function TooltipLines(itemId, link)
   if sc then
     local low, units, real = sc[1], sc[2], sc[4]
     if not noMin then out[#out + 1] = { "FMI min (in game, " .. agoText(sc[3]) .. ", " .. units .. " listed)", coins(low) } end
-    if real and real >= low * 1.03 then
+    -- 0.11.6: the 3% rule only avoids repeating FMI min; with FMI min hidden (AuctionDB loaded) the real price is the
+    -- only FMI price and always shows (Coal showed no FMI price at all: 5s 55c is within 3% of 5s 40c)
+    if real and (noMin or real >= low * 1.03) then
       out[#out + 1] = { "FMI real price" .. (noMin and (" (in game, " .. agoText(sc[3]) .. ")") or ""), coins(real) }
     end
     -- 24 h against the app's market a day before its snapshot (market / (1 + change))
@@ -870,7 +872,7 @@ local function TooltipLines(itemId, link)
       if low and not noMin then
         out[#out + 1] = { "FMI min" .. (#info > 0 and (" (" .. table.concat(info, ", ") .. ")") or ""), coins(low) }
       end
-      if market and min and market >= min * 1.03 then
+      if market and (noMin or (min and market >= min * 1.03)) then
         out[#out + 1] = { "FMI real price" .. (noMin and when and (" (" .. when .. ")") or ""), coins(market) }
       end
       if change then out[#out + 1] = { "FMI 24h", pct(change) } end

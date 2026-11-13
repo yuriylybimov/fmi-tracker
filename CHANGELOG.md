@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.11.6 (13 Nov 2026)
+- **FMI real price always shows next to AuctionDB.** With FMI min hidden (AuctionDB loaded), the real price was still left out when it was within 3% of the min, so an item like Coal (5s 40c min, 5s 55c real) showed no FMI price at all. The 3% rule now applies only when FMI min is shown.
+
 ## 0.11.5 (13 Nov 2026)
 - **Reads as fast as the frame allows:** each frame reads lots for 8 ms instead of a fixed 1000, so a 300,000-lot scan takes about as long as AuctionDB's (0.11.4 had read 24% when AuctionDB was done).
 - **Closing the auction house no longer cuts the scan** while the game still holds the list (AuctionDB reads on the same way); only when the list is gone or shrank is the scan dropped, as before never saved half.

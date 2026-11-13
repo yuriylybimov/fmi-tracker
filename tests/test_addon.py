@@ -482,6 +482,20 @@ class Addon(unittest.TestCase):
         self.lua.execute('SlashCmdList["FMITRACKER"]("min auto"); C_AddOns = nil')
         self.assertTrue(self.lines(2770)[0][0].startswith('FMI min'))  # no AuctionDB: the min is back
 
+    def test_with_auctiondb_loaded_the_real_price_shows_even_near_the_min(self):
+        # Coal: 5s 40c min, 5s 55c real (within 3%) - with FMI min hidden there must still be an FMI price
+        self.app_data(at_offset=3 * 3600)
+        self.lua.execute('C_AddOns = {IsAddOnLoaded = function(n) return n == "AuctionDB" end}')
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 2000000; _repl = {{2770, 10, 5400}}')
+        self.replicate()
+        self.lua.execute('_t = 2000300')
+        got = self.lines(2770)
+        self.assertFalse([l for l in got if l[0].startswith('FMI min')])
+        self.assertEqual(got[0], ('FMI real price (in game, 5 min ago)', '5s 40c'))
+        self.lua.execute('C_AddOns = nil')
+        self.assertFalse([l for l in self.lines(2770) if l[0].startswith('FMI real price')])  # min shown: no repeat
+
     def test_the_house_is_scanned_on_opening_at_most_every_15_min(self):
         self.lua.execute(self.REPL)
         self.lua.execute('_asked = 0; C_AuctionHouse.ReplicateItems = function() _asked = _asked + 1 end; _t = 3000000')

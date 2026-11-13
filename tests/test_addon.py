@@ -395,6 +395,7 @@ class Addon(unittest.TestCase):
         self.g.fire('AUCTION_HOUSE_SHOW')
         self.g.fire('REPLICATE_ITEM_LIST_UPDATE')
         self.drain()
+        self.assertTrue(any('scan started, reading 4500 lots' in self.lua.eval('_said[%d]' % i) for i in range(1, int(self.lua.eval('#_said')) + 1)))
         said = self.lua.eval('_said[#_said]')
         self.assertIn('scan done, you can close the auction house.|r Read 4500 lots of 1 items', said)
         # 0.11.5: closing the window while the game still holds the list: the read goes on and is saved

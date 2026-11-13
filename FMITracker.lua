@@ -705,9 +705,10 @@ local function ReadReplicate()
   local started = GetTime and GetTime() or 0
   local clock = debugprofilestop                                      -- ms; nil outside the game (tests): fixed batches
   local ids, unit, cnt, nl, missing = {}, {}, {}, 0, 0                -- flat: one entry per lot
-  -- 0.11.8: the game drops the list when the window closes, so a big read needs the window open: say so at the start
-  if n >= 20000 and not (DB and DB.opt and DB.opt.scanmsg == false) then
-    print("|cff66ccffFMI Tracker|r: reading " .. n .. " lots, keep the auction house open until it says the scan is done.")
+  -- 0.11.8: the game drops the list when the window closes, so the read needs the window open: say it when it starts
+  -- (like AuctionDB's "full scan started") and again when it is done
+  if not (DB and DB.opt and DB.opt.scanmsg == false) then
+    print("|cff66ccffFMI Tracker|r: scan started, reading " .. n .. " lots. Keep the auction house open until it says the scan is done.")
   end
   local function cut()
     scanState = nil

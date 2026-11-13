@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.10 (14 Nov 2026)
+- **Recipes get their FMI price lines again.** A recipe's tooltip answers the game's "which item is this" with the item the recipe makes: for Recipe: Transmute Iron to Gold that was the Gold Bar link (`/fmit why` showed it), so the recipe was treated as a Gold Bar variant and got no lines. Now a link of another item is ignored and the recipe is priced by its own id.
+- **The default bonus id 3524 no longer makes a variant.** Plain copies of an item (the Gold Bar above) carry it, so they lost the plain item's price. Enchants, gems, suffixes and other bonus ids still make a variant.
+
 ## 0.11.9 (13 Nov 2026)
 - **`/fmit why` tells why an item has no FMI price lines** (a vendor's recipe, say): hover the item, then type `/fmit why` (or `/fmit why <itemId>`). It shows the link (a variant with bonus ids is not priced like the plain item), whether the app data and the in-game scan have the item, and whether the lines are switched off.
 

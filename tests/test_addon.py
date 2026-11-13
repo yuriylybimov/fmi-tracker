@@ -268,6 +268,19 @@ class Addon(unittest.TestCase):
         self.assertFalse([l for l in got if l[0].startswith('FMI min')])
         self.assertIn(('FMI your last sale (2 h ago)', '1g 19s'), got)          # own trades still shown
 
+    def test_the_default_bonus_id_is_not_a_variant_a_real_bonus_is(self):
+        v = self.lua.eval('FMITracker.isVariant')
+        self.assertFalse(v('|cffffffff|Hitem:3577::::::::42:1491:::1:3524::::::|h[Gold Bar]|h|r'))
+        self.assertTrue(v('|cffffffff|Hitem:3577::::::::42:1491:::1:6652::::::|h[Gold Bar]|h|r'))
+        self.assertTrue(v('|cffffffff|Hitem:3577:15:::::::42|h[Gold Bar]|h|r'))           # an enchant
+
+    def test_a_recipe_tooltip_with_the_link_of_the_made_item_gets_the_recipe_price(self):
+        self.app_data()
+        self.lua.execute('_tt = {lines = {}, AddDoubleLine = function(self, a, b) table.insert(self.lines, a) end, AddLine = function(self, a) table.insert(self.lines, a) end}')
+        self.lua.eval('FMITracker.addLines')(self.lua.eval('_tt'), 2770, '|cffffffff|Hitem:3577::::::::42:1491:::1:6652::::::|h[Gold Bar]|h|r')
+        got = list(self.lua.eval('_tt.lines').values())
+        self.assertTrue([l for l in got if l.startswith('FMI min')], got)         # the made item's (variant) link is ignored
+
     def test_old_prices_say_so_and_the_lines_can_be_switched_off(self):
         self.app_data(at_offset=8 * 3600)
         self.assertEqual(self.lines(2770)[0], ('FMI min (8 h ago, 300 listed)', '1g 10s'))

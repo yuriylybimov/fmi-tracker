@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.9"
+local VERSION = "0.11.10"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -115,6 +115,7 @@ local function bagGroups()
   return out
 end
 
+local PLAIN_BONUS = { [3524] = true }                              -- bonus ids that do not change the item
 local function isVariant(link)
   if not link then return false end
   local body = link:match("item:([^|]*)")
@@ -122,7 +123,13 @@ local function isVariant(link)
   local f = {}
   for part in (body .. ":"):gmatch("([^:]*):") do f[#f + 1] = part end
   for i = 2, 7 do local v = tonumber(f[i]); if v and v ~= 0 then return true end end
-  return (tonumber(f[13]) or 0) > 0
+  -- 0.11.10: a bonus id makes a variant, except the default ones every plain copy carries (3524: the link of a
+  -- recipe's Gold Bar was "item:3577::::::::42:1491:::1:3524" and lost its price)
+  for i = 1, tonumber(f[13]) or 0 do
+    local b = tonumber(f[13 + i])
+    if b and not PLAIN_BONUS[b] then return true end
+  end
+  return false
 end
 
 local function addTo(into, id, n, link)
@@ -909,6 +916,10 @@ local function unitPrice(itemId)
 end
 local lastTip = nil                                                   -- 0.11.9: the last item a tooltip was built for (/fmit why)
 local function AddLines(tt, itemId, link)
+  -- 0.11.10: a recipe's tooltip answers GetItem() with the item the recipe makes (Recipe: Transmute Iron to Gold gave the
+  -- Gold Bar link), so a link of another item is not this item's link
+  local linked = link and tonumber(link:match("item:(%d+)"))
+  if linked and itemId and linked ~= itemId then link = nil end
   lastTip = { id = itemId, link = link }
   for _, l in ipairs(TooltipLines(itemId, link)) do
     if l[2] then tt:AddDoubleLine(l[1], l[2], 0.86, 0.62, 0.36, 1, 1, 1)
@@ -1014,6 +1025,8 @@ local function HookTooltips()
   end
 end
 FMITracker.tooltipLines = TooltipLines
+FMITracker.addLines = AddLines
+FMITracker.isVariant = isVariant
 FMITracker.live = function(itemId) return DB and DB.live and DB.live[itemId] end
 FMITracker.scan = function(itemId) return SCAN[itemId] end
 FMITracker.craftLines = craftLines

@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.6"
+local VERSION = "0.11.7"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -443,6 +443,7 @@ end
 -- click is the player's own action). Never in combat or in an instance (it waits and comes back after); "Later" waits
 -- until there is something new again; the plate hides by itself after 45 s. /fmit prompt off switches it off.
 local prompt, promptShown, snoozedAt, pending = nil, false, 0, false
+local scanState, scanOpenAt, scanHouse = nil, 0, nil                 -- nil, "waiting", "reading"; the autosync must see it
 local function quietPlace()
   if InCombatLockdown and InCombatLockdown() then return true end
   if IsInInstance then local inside = IsInInstance(); if inside then return true end end
@@ -480,7 +481,14 @@ local function AutoSync()
   if now() - (DB.lastAuto or 0) < 1200 then return end
   DB.lastAuto = now()
   print("|cff66ccffFMI Tracker|r: saving for the app and loading its newest prices (reloads the interface). /fmit autosync off stops this.")
-  if C_Timer and C_Timer.After then C_Timer.After(1, SaveNow) else SaveNow() end
+  -- 0.11.7: never reload while the auction house list is being read (the reload cut the Forever read at 45%); it waits for
+  -- the end of the read, at most 2 minutes
+  local waited = 0
+  local function go()
+    if scanState == "reading" and waited < 120 and C_Timer and C_Timer.After then waited = waited + 1; C_Timer.After(1, go) return end
+    SaveNow()
+  end
+  if C_Timer and C_Timer.After then C_Timer.After(1, go) else SaveNow() end
 end
 local function SavePrompt()
   if prompt then return prompt end
@@ -655,7 +663,7 @@ local SCAN, scanAt, scanGen = {}, nil, 0
 local SCAN_BATCH = 1000
 local REAL_SHARE = 0.15
 local WAIT_TIMEOUT = 60
-local scanState, scanOpenAt, scanHouse = nil, 0, nil                                  -- nil, "waiting", "reading"
+-- (scanState, scanOpenAt, scanHouse are declared above the autosync, 0.11.7)
 local function ahdbLoaded()
   local fn = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
   return fn and fn("AuctionDB") and true or false

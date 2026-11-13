@@ -557,6 +557,23 @@ class Addon(unittest.TestCase):
         self.g.fire('MAIL_SHOW'); self.g.fire('MAIL_CLOSED'); self.g.run_timers()
         self.assertEqual(self.lua.eval('_reloads'), 1)
 
+    def test_the_autosync_waits_for_a_scan_that_is_being_read(self):
+        # 0.11.7: closing the auction house right after the list came started a reload 1 s later and cut the Forever read at 45%
+        self.lua.execute(self.REPL)
+        self.lua.execute('_t = 3000000; FMITrackerAppData = {["at"] = 3000000 - 7200, ["written"] = 3000000 - 7200, ["items"] = {}}; '
+                         'for i = 1, 4500 do _repl[i] = {2770, 1, 100 + i} end')
+        self.g.fire('AUCTION_HOUSE_SHOW')
+        self.g.fire('REPLICATE_ITEM_LIST_UPDATE')                       # the read starts and goes on over several frames
+        self.g.fire('AUCTION_HOUSE_CLOSED')                             # the owner closes the window: the autosync wants to reload
+        self.lua.execute('_combat = true')                              # the read is paused, so it is still running when the reload is due
+        for _ in range(5):
+            self.g.run_timers()
+        self.assertEqual(self.lua.eval('_reloads'), 0)                  # no reload during the read
+        self.lua.execute('_combat = false')
+        self.drain()
+        self.assertEqual(self.scan(2770), (101, 4500, 3000000))         # the whole scan was read
+        self.assertEqual(self.lua.eval('_reloads'), 1)                  # and only then the reload
+
     def test_stale_app_prices_show_the_button_at_the_auction_house_once_per_sync(self):
         self.lua.execute('SlashCmdList["FMITRACKER"]("autosync off")')
         self.lua.execute('_t = 3000000; FMITrackerAppData = {["at"] = 3000000 - 7200, ["written"] = 3000000 - 7200, ["items"] = {}}')

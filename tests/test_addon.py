@@ -575,6 +575,17 @@ class Addon(unittest.TestCase):
         self.assertEqual(self.scan(2770), (101, 4500, 3000000))         # the whole scan was read
         self.assertEqual(self.lua.eval('_reloads'), 1)                  # and only then the reload
 
+    def test_why_says_what_the_last_tooltip_item_has(self):
+        # 0.11.9
+        self.app_data()
+        self.g.fire('PLAYER_LOGIN')
+        self.lua.execute('SlashCmdList["FMITRACKER"]("why 99999")')
+        said = self.lua.eval('table.concat(_said, " ")')
+        self.assertIn('item 99999', said)
+        self.assertIn('is NOT in it', said)
+        self.lua.execute('SlashCmdList["FMITRACKER"]("why 2770")')
+        self.assertIn('this item is in it', self.lua.eval('_said[#_said - 1]'))
+
     def test_stale_app_prices_show_the_button_at_the_auction_house_once_per_sync(self):
         self.lua.execute('SlashCmdList["FMITRACKER"]("autosync off")')
         self.lua.execute('_t = 3000000; FMITrackerAppData = {["at"] = 3000000 - 7200, ["written"] = 3000000 - 7200, ["items"] = {}}')

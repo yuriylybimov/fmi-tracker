@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.11.9 (13 Nov 2026)
+- **`/fmit why` tells why an item has no FMI price lines** (a vendor's recipe, say): hover the item, then type `/fmit why` (or `/fmit why <itemId>`). It shows the link (a variant with bonus ids is not priced like the plain item), whether the app data and the in-game scan have the item, and whether the lines are switched off.
+
 ## 0.11.8 (13 Nov 2026)
 - **Reads a big auction house faster and says to keep it open.** The game drops the auction house list when the window closes (in the log the read stopped at 45% right after closing, before any reload), so a read cannot go on without the window. It now works 20 ms a frame instead of 8 (0.11.7 still holds: the automatic reload waits for a read that is running), and a line when the read starts (like AuctionDB's) tells you to keep the window open until "scan done".
 

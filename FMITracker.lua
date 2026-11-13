@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.8"
+local VERSION = "0.11.9"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -907,7 +907,9 @@ local function unitPrice(itemId)
   if it then return it[1] or it[2] end
   return nil
 end
+local lastTip = nil                                                   -- 0.11.9: the last item a tooltip was built for (/fmit why)
 local function AddLines(tt, itemId, link)
+  lastTip = { id = itemId, link = link }
   for _, l in ipairs(TooltipLines(itemId, link)) do
     if l[2] then tt:AddDoubleLine(l[1], l[2], 0.86, 0.62, 0.36, 1, 1, 1)
     else tt:AddLine(l[1], 0.86, 0.62, 0.36) end
@@ -1145,6 +1147,24 @@ SlashCmdList["FMITRACKER"] = function(msg)
     return
   end
   if msg == "sync" then SaveNow(); return end
+  -- 0.11.9: /fmit why [itemId]: why the tooltip of the last item (or of the id) has no FMI price lines
+  if msg == "why" or msg:match("^why %d+$") then
+    local id, link = tonumber(msg:match("^why (%d+)$")), nil
+    if not id then id, link = lastTip and lastTip.id, lastTip and lastTip.link end
+    local say = function(t) print("|cff66ccffFMI Tracker|r: " .. t) end
+    if not id then say("hover an item first (or /fmit why <itemId>).") return end
+    local A = appData()
+    local sc = SCAN[id]
+    local n = 0
+    for _ in pairs(A.items or {}) do n = n + 1 end
+    say("item " .. id .. ", link " .. (link and link:gsub("|", "||") or "none") .. (isVariant(link) and ": a variant (bonus ids or gems), not priced like the plain item" or ": plain"))
+    say("app data: " .. (A.items and (n .. " items of " .. tostring(A.house or "?") .. " " .. tostring(A.region or "")) or "none") ..
+        ", this item " .. ((A.items and A.items[id]) and "is in it" or "is NOT in it") ..
+        "; in-game scan: " .. (sc and ("yes, " .. agoText(sc[3])) or "no (the last scan was not saved)") .. ".")
+    local out = TooltipLines(id, link)
+    say(#out .. " FMI lines" .. (DB.opt.tooltip == false and " (tooltip lines are off: /fmit tooltip on)" or "") .. (hideMin() and "; FMI min is hidden while AuctionDB is loaded (/fmit min on)" or "") .. ".")
+    return
+  end
   if msg == "scanmsg off" or msg == "scanmsg on" then
     DB.opt.scanmsg = (msg == "scanmsg on")
     print("|cff66ccffFMI Tracker|r: the line after an auction house scan is " .. (DB.opt.scanmsg and "on" or "off") .. ".")

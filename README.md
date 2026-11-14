@@ -2,7 +2,7 @@
 
 A small, read-only World of Warcraft addon for players who track their gold. It records, per character, what only the game knows and no auction scan can show, and writes it to one saved-variables file that a companion app (or your own spreadsheet script) can read.
 
-**Status: alpha.** The logic is tested against a fake of the WoW API (`tests/`); it has not been proven in the game yet. Expect rough edges and please open an issue with what you see.
+**Status: alpha.** Used in the game every day by its author on WoW Forever and Retail since November 2026, and tested against a fake of the WoW API (`tests/`). Expect rough edges and please open an issue with what you see.
 
 Works on Retail (Interface 120105) and WoW Forever (16001): both use the modern client API.
 
@@ -16,7 +16,7 @@ Works on Retail (Interface 120105) and WoW Forever (16001): both use the modern 
 Not recorded (yet): lost deposits (expired or cancelled auctions), quest and loot money, trades between players, the guild bank.
 
 ## What it never does
-It does not buy, sell, post, cancel, open or take mail, and it does not scan the auction house. Everything stays in `WTF/.../SavedVariables/FMITracker.lua` on your computer. Nothing is sent anywhere.
+It does not buy, sell, post, cancel, open or take mail. It reads the auction house only while you have it open (see below). Everything stays in `WTF/.../SavedVariables/FMITracker.lua` on your computer. Nothing is sent anywhere.
 
 ## Install
 Copy the `FMITracker` folder into `World of Warcraft/_retail_/Interface/AddOns/` (or `_forever_`). Enable it on the character select screen. In the game `/fmit` shows how many entries are recorded.

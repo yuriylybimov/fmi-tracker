@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.11 (14 Nov 2026)
+
+- Fix: one auction sale could be logged twice. The game sometimes gives a mail's invoice first without the buyer's
+  name and, after a reload a second later, with it; the name was part of the key that tells mails apart. The key no
+  longer has the name, and mails already logged with a name by older versions still count as seen. Found in the app's
+  demand audit: 21 of 307 Forever trades were such doubles.
+
 ## 0.11.10 (14 Nov 2026)
 - **Recipes get their FMI price lines again.** A recipe's tooltip answers the game's "which item is this" with the item the recipe makes: for Recipe: Transmute Iron to Gold that was the Gold Bar link (`/fmit why` showed it), so the recipe was treated as a Gold Bar variant and got no lines. Now a link of another item is ignored and the recipe is priced by its own id.
 - **The default bonus id 3524 no longer makes a variant.** Plain copies of an item (the Gold Bar above) carry it, so they lost the plain item's price. Enchants, gems, suffixes and other bonus ids still make a variant.

@@ -23,7 +23,7 @@
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
 
-local VERSION = "0.11.10"
+local VERSION = "0.11.11"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -326,12 +326,23 @@ local function ScanMail()
     if type(r) == "table" and r[1] and r[2] then
       local invoiceType, itemName, playerName, bid, buyout, deposit, consignment, count, itemId = unpack(r, 1, 9)
       local price = (bid and bid > 0) and bid or (buyout or 0)
-      local base = table.concat({ invoiceType, itemName, playerName or "", price, deposit or 0, consignment or 0, count or 0 }, ":")
+      -- 0.11.11: the buyer's name is not part of the key. The game can give a mail's invoice first without the name and
+      -- a moment later (after a reload) with it; with the name in the key one sale was logged twice. Keys written by
+      -- 0.11.10 and older with a name still count as seen, so mails already logged are not logged again.
+      local base = table.concat({ invoiceType, itemName, "", price, deposit or 0, consignment or 0, count or 0 }, ":")
+      local named = (playerName and playerName ~= "") and
+        table.concat({ invoiceType, itemName, playerName, price, deposit or 0, consignment or 0, count or 0 }, ":") or nil
       -- the expiry estimate moves by a second or two between looks: a neighbouring minute is the same group of mails
       local key = base .. ":" .. minute
       if not DB.seen[key] then
-        if DB.seen[base .. ":" .. (minute - 1)] then key = base .. ":" .. (minute - 1)
-        elseif DB.seen[base .. ":" .. (minute + 1)] then key = base .. ":" .. (minute + 1) end
+        for _, m in ipairs({ minute - 1, minute + 1 }) do
+          if DB.seen[base .. ":" .. m] then key = base .. ":" .. m; break end
+        end
+      end
+      if not DB.seen[key] and named then
+        for _, m in ipairs({ minute, minute - 1, minute + 1 }) do
+          if DB.seen[named .. ":" .. m] then key = named .. ":" .. m; break end
+        end
       end
       here[key] = (here[key] or 0) + 1
       local logged = DB.seenN[key] or (DB.seen[key] and 1 or 0)

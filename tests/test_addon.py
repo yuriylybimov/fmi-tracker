@@ -144,6 +144,29 @@ class Addon(unittest.TestCase):
         self.g.fire('PLAYERBANKSLOTS_CHANGED'); self.g.run_timers()
         self.assertEqual(self.get('chars["Orakh Gorehowl"].bank[2840]'), 210)
 
+    def reload(self):
+        """A /reload: the addon runs again with the saved FMITrackerDB (and a fresh per-session mail cache)."""
+        self.lua.execute(R.SRC.replace('local ADDON = ...', ''))
+        self.g.fire('ADDON_LOADED', 'FMITracker')
+        self.g.fire('PLAYER_LOGIN')
+
+    def test_a_mail_read_without_the_buyer_and_again_with_him_is_one_sale(self):
+        # 0.11.11: in the game the invoice came first without the buyer's name and, after a reload a second later, with
+        # it; the name was part of the key, so the sale was logged twice (21 of 307 Forever trades, 14 Nov 2026)
+        self.lua.execute('_mail = {{sender="AH", subject="s", money=760, daysLeft=29.5, invoice={type="seller",name="Copper Ore",player="",bid=800,buyout=800,deposit=100,cut=40,count=1}}}')
+        self.g.fire('MAIL_SHOW')
+        self.reload()
+        self.lua.execute('_t = _t + 2; _mail[1].invoice.player = "Drath"')
+        self.g.fire('MAIL_SHOW')
+        self.assertEqual([r[1] for r in self.rows()], ['as'])
+
+    def test_a_mail_logged_by_an_older_version_with_the_buyer_is_not_logged_again(self):
+        self.lua.execute('_mail = {{sender="AH", subject="s", money=760, daysLeft=29.5, invoice={type="seller",name="Copper Ore",player="Drath",bid=800,buyout=800,deposit=100,cut=40,count=1}}}')
+        minute = int(self.lua.eval('math.floor((_t + 29.5 * 86400) / 60)'))
+        self.lua.execute('FMITrackerDB.seen["seller:Copper Ore:Drath:800:100:40:1:%d"] = _t - 60' % minute)
+        self.g.fire('MAIL_SHOW')
+        self.assertEqual(self.rows(), [])
+
     def test_two_identical_sales_are_two_entries_and_rereading_adds_none(self):
         sale = '{sender="AH", subject="Auction successful: Rough Stone", money=614, daysLeft=29.5, invoice={type="seller",name="Rough Stone",player="",bid=646,buyout=646,deposit=100,cut=32,count=38}}'
         self.lua.execute('_mail = {%s, %s}' % (sale, sale))

@@ -11,6 +11,7 @@ Works on Retail (Interface 120105) and WoW Forever (16001): both use the modern 
 - **Vendor sales and purchases**, from the change of your bags while a merchant window is open.
 - **Repairs, flights, trainers**: the money spent right after the action.
 - **Professions** of each character (skill line ids), so a reader can tell which crafts the player can make.
+- **The vendor price the game knows** for every plain item it sees (bags, bank, mail, a tooltip, auction results): the sell price the client reports, hotfixes included, with when it was first and last seen at that price.
 - **What each character holds**: bags (always), bank and shared bank (read while the bank is open, from the tabs you bought; kept across logins), mailbox attachments (when you open the mailbox). Items with bonus ids, enchants, gems or a suffix are kept as variants.
 
 Not recorded (yet): lost deposits (expired or cancelled auctions), quest and loot money, trades between players, the guild bank.

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.0 (15 Nov 2026)
+
+- **Remembers the vendor price the game itself knows.** For every plain item the addon sees (bags, bank, account bank,
+  mail, a tooltip, auction results) it keeps `FMITrackerDB.sell[itemId] = {copper, since, checked}`: the item's sell
+  price as the client reports it (`GetItemInfo`), hotfixes included, and when it was first and last seen at that price.
+  0 means vendors do not buy it. Only items the client has loaded are kept (an unloaded item gives no answer). The
+  Market Intelligence app uses it instead of its client tables, which can be older than a hotfix (Iron Grenade went from
+  5s to 1s 25c on 10 Nov 2026 and showed a false deal).
+
 ## 0.11.11 (14 Nov 2026)
 
 - Fix: one auction sale could be logged twice. The game sometimes gives a mail's invoice first without the buyer's

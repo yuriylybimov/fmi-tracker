@@ -71,6 +71,30 @@ class Addon(unittest.TestCase):
                           get('chars["Orakh Gorehowl"].mail[2589]'), get('account[2447]')), (30, 1, 100, 7, 40))
 
 
+    def test_the_client_vendor_price_of_items_it_sees_is_kept_with_when(self):
+        self.lua.execute('_bags = {[2770]=30,[19019]=1}; _links[19019] = "|Hitem:19019::::::::60::::2:6652:1472|h"')
+        self.g.fire('PLAYER_ENTERING_WORLD')
+        self.g.run_timers()
+        get = lambda path: self.lua.eval('FMITrackerDB.sell%s' % path)
+        self.assertEqual((get('[2770][1]'), get('[2770][2]'), get('[2770][3]')), (10, 1000000, 1000000))
+        self.assertIsNone(get('[19019]'))                     # a variant is not a plain item
+        self.lua.execute('_t = _t + 60')
+        self.g.fire('PLAYER_ENTERING_WORLD')
+        self.g.run_timers()
+        self.assertEqual((get('[2770][1]'), get('[2770][2]'), get('[2770][3]')), (10, 1000000, 1000060))
+        # a hotfix: the client now answers another price, which starts a new "since"
+        self.lua.execute('local f = C_Item.GetItemInfo; C_Item.GetItemInfo = function(id) if id == 2770 then '
+                         'return "n", "l", 1, 1, 1, "c", "s", 20, "", 0, 4 end return f(id) end; _t = _t + 60')
+        self.g.fire('PLAYER_ENTERING_WORLD')
+        self.g.run_timers()
+        self.assertEqual((get('[2770][1]'), get('[2770][2]'), get('[2770][3]')), (4, 1000120, 1000120))
+
+    def test_an_item_the_client_has_not_loaded_gives_no_vendor_price(self):
+        self.lua.execute('C_Item.GetItemInfo = function(id) return nil end; _bags = {[2770]=30}')
+        self.g.fire('PLAYER_ENTERING_WORLD')
+        self.g.run_timers()
+        self.assertIsNone(self.lua.eval('FMITrackerDB.sell and FMITrackerDB.sell[2770]'))
+
     def test_empty_reading_at_logout_keeps_the_last_real_holdings(self):
         self.lua.execute('_bags = {[2770]=30}')
         self.g.fire('PLAYER_ENTERING_WORLD')

@@ -22,8 +22,12 @@
 -- lots; it never searches by itself) and puts them in the tooltip at once: "FMI last seen", no /reload needed.
 -- 0.7.0: quieter saving: by default no plate pops up; a small "Save for the app (N)" button sits under the mailbox or the
 -- merchant window while something is unsaved. /fmit reminder button|popup|off (popup at most every 30 min).
+-- 0.12.0: FMITrackerDB.sell[itemId] = {copper, since, checked}: the vendor price the client itself knows (GetItemInfo
+-- sellPrice, hotfixes included) for every plain item it sees in bags, bank, mail, tooltips and auction results; 0 means
+-- vendors do not buy it. "since" is when that price was first seen, "checked" the last time. The app uses it instead of
+-- its client tables, which are older than the hotfixes (Iron Grenade 5s -> 1s 25c on 10 Nov 2026).
 
-local VERSION = "0.11.11"
+local VERSION = "0.12.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -82,6 +86,22 @@ local function itemName(id)
   if fn then local ok, n = pcall(fn, id); if ok and n then return n end end
   if GetItemInfo then local ok, n = pcall(GetItemInfo, id); if ok and n then return n end end
   return ""
+end
+
+-- 0.12.0: the client's own vendor price of an item, kept only when the item is loaded (GetItemInfo answers with its name)
+local function NoteSell(id)
+  if not DB or type(id) ~= "number" or id <= 0 then return end
+  local fn = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+  if not fn then return end
+  local ok, name, _, _, _, _, _, _, _, _, _, price = pcall(fn, id)
+  if not ok or not name or type(price) ~= "number" or price < 0 then return end
+  DB.sell = DB.sell or {}
+  local e, t = DB.sell[id], now()
+  if e and e[1] == price then e[3] = t else DB.sell[id] = { price, t, t } end
+end
+
+local function NoteSells(items)
+  for id in pairs(items or {}) do if type(id) == "number" then NoteSell(id) end end
 end
 
 local function itemIdOf(x)
@@ -219,6 +239,8 @@ local function ScanBank()
   if slots > 0 then me.bank, me.bankAt = bank, now() end
   local account, aslots = countBags(ids.account)
   if aslots > 0 then DB.account, DB.accountAt = account, now() end
+  NoteSells(bank)
+  NoteSells(account)
 end
 
 local function ScanHoldings()
@@ -230,6 +252,7 @@ local function ScanHoldings()
   -- During logout and reload the client answers with empty bags and 0 money: keep the last real reading instead.
   if not next(bags) and money == 0 and me.bagsAt then return end
   me.bags, me.bagsAt = bags, now()
+  NoteSells(bags)
   me.money, me.level = money, UnitLevel("player")
   if bankOpen then ScanBank() end
 end
@@ -248,6 +271,7 @@ local function ScanMailItems()
     end
   end
   me.mail, me.mailAt = out, now()
+  NoteSells(out)
 end
 
 local function ScheduleHoldings()
@@ -627,6 +651,7 @@ local function Seen(itemId, unit, qty)
   if not DB or not itemId or not unit or unit <= 0 then return end
   if not DB.live[itemId] then liveN = liveN + 1 end
   DB.live[itemId] = { math.floor(unit), math.floor(qty or 0), now() }
+  NoteSell(itemId)
   if liveN > MAX_LIVE + 200 then trimLive() end
 end
 local function plainKey(key)
@@ -932,6 +957,7 @@ local function AddLines(tt, itemId, link)
   local linked = link and tonumber(link:match("item:(%d+)"))
   if linked and itemId and linked ~= itemId then link = nil end
   lastTip = { id = itemId, link = link }
+  NoteSell(itemId)
   for _, l in ipairs(TooltipLines(itemId, link)) do
     if l[2] then tt:AddDoubleLine(l[1], l[2], 0.86, 0.62, 0.36, 1, 1, 1)
     else tt:AddLine(l[1], 0.86, 0.62, 0.36) end

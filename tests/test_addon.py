@@ -406,6 +406,31 @@ class Addon(unittest.TestCase):
         self.assertEqual((int(item), salv, mats, who), (clicked, '0', '10938:1,10940:2', 'Orakh Gorehowl'))
         self.assertEqual((quality, level, cls), ('2', '20', '4') if clicked == 4243 else ('3', '30', '2'))
 
+    def test_loot_before_the_success_event_and_another_spell_id_by_name(self):
+        self.de_setup()
+        self.lua.execute('C_Spell = { GetSpellName = function(id) if id == 13262 or id == 1300000 then return "Disenchant" end return "Other" end }')
+        g = self.g
+        g.fire('UNIT_SPELLCAST_SENT', 'player', '', 'G9', 1300000)   # a client with its own id for Disenchant
+        self.lua.execute('_bags[4243] = nil; _loot = {{10940, 1}}')
+        g.fire('LOOT_READY'); g.fire('LOOT_OPENED')                  # the loot window first
+        g.fire('UNIT_SPELLCAST_SUCCEEDED', 'player', 'G9', 1300000)  # then the success: no second record
+        self.lua.execute('_loot = {}')
+        self.assertEqual([(r[1], r[6]) for r in self.de_rows()], [('4243', '10940:1')])
+        g.fire('UNIT_SPELLCAST_SENT', 'player', '', 'G10', 7777)     # another spell: nothing
+        self.lua.execute('_loot = {{2589, 1}}'); g.fire('LOOT_READY')
+        self.assertEqual(len(self.de_rows()), 1)
+
+    def test_bags_that_update_after_the_loot_still_give_the_item(self):
+        self.de_setup()
+        self.g.fire('UNIT_SPELLCAST_SENT', 'player', '', 'G1', 13262)
+        self.g.fire('UNIT_SPELLCAST_SUCCEEDED', 'player', 'G1', 13262)
+        self.lua.execute('_loot = {{10940, 2}}')
+        self.g.fire('LOOT_READY')                                    # the gloves are still in the bags
+        self.assertEqual(self.de_rows(), [])
+        self.lua.execute('_bags[4243] = nil')
+        self.g.run_timers()
+        self.assertEqual([r[1] for r in self.de_rows()], ['4243'])
+
     def test_without_a_click_the_item_that_left_the_bags_is_taken(self):
         self.de_setup(salvager=True)
         self.cast(consume=4243)

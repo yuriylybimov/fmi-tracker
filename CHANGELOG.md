@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.1 (16 Nov 2026)
+
+- **Disenchant records on Forever.** 0.13.0 recorded nothing there (two disenchants on 16 Nov left no record). Now:
+  Disenchant is recognised by its id or, on a client that gives it another id, by the spell's name; a loot window that
+  opens before the cast reports success counts; a left click on the bag slot (PickupContainerItem) names the item too;
+  when the bags update a moment after the loot, the item is looked for again (twice, 1 s apart). The first steps leave
+  a short "de ..." trail in `FMITrackerDB.dbg`, so a missing record can be explained.
+
 ## 0.14.0 (16 Nov 2026)
 
 - **Records auctions that came back unsold.** An "Auction expired" or "Auction cancelled" mail is logged (`ae`, `ac`) with

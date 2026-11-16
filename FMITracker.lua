@@ -29,7 +29,7 @@
 -- 0.13.0: FMITrackerDB.de, every Disenchant you cast with what came out and whether the Arcane Salvager buff was on (the
 -- app checks its chances against your results); "FMI disenchant" in tooltips from the app's data.
 
-local VERSION = "0.14.0"
+local VERSION = "0.14.1"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -888,22 +888,37 @@ local function DeTargetClicked(bag, slot)
   local info = C and C.GetContainerItemInfo and C.GetContainerItemInfo(bag, slot)
   if info and info.itemID then deTarget = { id = info.itemID, at = GetTime() } end
 end
+-- 0.14.1: Disenchant by its id or, on a client that gives it another id (Forever), by the spell's name; the first casts
+-- leave a short trail in FMITrackerDB.dbg ("de ...") so a missing record can be explained
+local deName
+local function isDe(spell)
+  if spell == DE_SPELL then return true end
+  if not spell then return false end
+  local nameOf = (C_Spell and C_Spell.GetSpellName) or (GetSpellInfo and function(id) return (GetSpellInfo(id)) end)
+  if not nameOf then return false end
+  deName = deName or nameOf(DE_SPELL) or "Disenchant"
+  local ok, n = pcall(nameOf, spell)
+  return ok and n == deName
+end
 local function DeSent(unit, castGUID, spell)
-  if unit ~= "player" or spell ~= DE_SPELL then return end
+  if unit ~= "player" or not isDe(spell) then return end
+  Dbg("de sent spell=" .. tostring(spell) .. " target=" .. tostring(deTarget and deTarget.id))
   deCast = { guid = castGUID, bags = bagCounts(), salv = salvager(), at = GetTime(),
              id = deTarget and GetTime() - deTarget.at < 30 and deTarget.id or nil }
   deTarget = nil
 end
 local function DeSucceeded(unit, castGUID, spell)
-  if unit ~= "player" or spell ~= DE_SPELL then return end
+  if unit ~= "player" or not isDe(spell) then return end
   local c = deCast
   deCast = nil
+  Dbg("de succeeded cast=" .. tostring(c ~= nil) .. " pending=" .. tostring(dePending ~= nil))
+  if dePending and dePending.done then dePending = nil return end   -- the loot came first and is already recorded
   if not c or (c.guid and castGUID and c.guid ~= castGUID) then return end
   local salv = salvager()
   dePending = { at = GetTime(), id = c.id, bags = c.bags, salv = (salv == c.salv) and salv or "?" }
 end
 local function DeStopped(unit, castGUID, spell)
-  if unit == "player" and spell == DE_SPELL then deCast = nil end
+  if unit == "player" and isDe(spell) then deCast = nil end
 end
 -- the item that left the bags: one itemId of armour or weapons whose count went down
 local function deGone(before)
@@ -919,10 +934,17 @@ local function deGone(before)
   end
   return found
 end
+local DeRecord
 local function DeLoot()
   local p = dePending
+  -- 0.14.1: the loot window can open before the cast reports success; a cast sent in the last 10 s then counts too
+  if (not p or p.done) and deCast and GetTime() - deCast.at < 10 then
+    p = { at = GetTime(), id = deCast.id, bags = deCast.bags, salv = deCast.salv, early = true }
+    dePending = p
+  end
   if not p or GetTime() - p.at > 8 or p.done then dePending = (p and not p.done and GetTime() - p.at <= 8) and p or nil return end
   local n = GetNumLootItems and GetNumLootItems() or 0
+  Dbg("de loot slots=" .. n .. (p.early and " (before success)" or ""))
   if n < 1 then return end
   local mats = {}
   for slot = 1, n do
@@ -934,9 +956,19 @@ local function DeLoot()
   end
   p.done = true
   dePending = nil
+  if p.early then deCast = nil end
+  DeRecord(p, mats, 0)
+end
+-- the item: the one clicked, else the one that left the bags; the bags may update a moment after the loot (two tries)
+function DeRecord(p, mats, tries)
   local id = p.id or deGone(p.bags)
+  if not id and tries < 2 and C_Timer and C_Timer.After then
+    C_Timer.After(1, function() safe(DeRecord, p, mats, tries + 1) end)
+    return
+  end
   local quality, level, class = deInfo(id)
-  if not id or not quality then return end
+  if not id or not quality then Dbg("de no item: id=" .. tostring(id)) return end
+  Dbg("de recorded " .. id)
   local parts = {}
   for mid, q in pairs(mats) do parts[#parts + 1] = mid .. ":" .. q end
   table.sort(parts)
@@ -1254,6 +1286,8 @@ f:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
     safe(HookCrafts)
     -- 0.13.0: the bag item clicked while Disenchant asks for a target is the item disenchanted
     if C_Container and C_Container.UseContainerItem then hooksecurefunc(C_Container, "UseContainerItem", function(b, sl) safe(DeTargetClicked, b, sl) end) end
+    -- 0.14.1: a left click on a bag slot while the spell waits for a target goes through PickupContainerItem
+    if C_Container and C_Container.PickupContainerItem then hooksecurefunc(C_Container, "PickupContainerItem", function(b, sl) safe(DeTargetClicked, b, sl) end) end
   elseif event == "MAIL_SHOW" or event == "MAIL_INBOX_UPDATE" then
     openHost = "mail"
     safe(ScanMail)

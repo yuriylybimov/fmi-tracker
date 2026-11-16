@@ -29,6 +29,8 @@ _said = {}
 function print(...) local t = {} for i = 1, select('#', ...) do t[#t + 1] = tostring(select(i, ...)) end _said[#_said + 1] = table.concat(t, ' ') end
 AUCTION_WON_MAIL_SUBJECT = "Auction won: %s"
 AUCTION_SOLD_MAIL_SUBJECT = "Auction successful: %s"
+AUCTION_EXPIRED_MAIL_SUBJECT = "Auction expired: %s"
+AUCTION_REMOVED_MAIL_SUBJECT = "Auction cancelled: %s"
 C_Timer = { After = function(sec, fn) table.insert(_timers, fn) end }
 C_Item = {
   GetItemInfoInstant = function(x) if type(x) == "number" then return x end

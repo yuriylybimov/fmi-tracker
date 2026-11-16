@@ -126,6 +126,19 @@ class Addon(unittest.TestCase):
         self.g.fire('MAIL_INBOX_UPDATE')
         self.assertEqual([(r[1], r[2], r[3], r[4], r[5]) for r in self.rows()], [('ab', '2589', 'Linen Cloth', '5', '0'), ('as', '2770', 'Copper Ore', '0', '7600')])
 
+    def test_expired_and_cancelled_auctions_are_logged_with_the_time_the_mail_was_sent(self):
+        self.lua.execute('_mail = {{sender="Auction House", subject="Auction expired: Linen Cloth", money=0, daysLeft=29.5, att={2589, 5}},'
+                         '{sender="Auction House", subject="Auction cancelled: Copper Ore", money=0, daysLeft=30, att={2770, 20}},'
+                         '{sender="Auction House", subject="Auction expired: Copper Ore", money=0, daysLeft=29}}')   # item already taken
+        for ev in ('MAIL_SHOW', 'MAIL_INBOX_UPDATE', 'MAIL_INBOX_UPDATE'):
+            self.g.fire(ev)
+        rows = [(r[1], r[2], r[3], r[4], r[5], int(r[7])) for r in self.rows()]
+        t = self.lua.eval('_t')
+        self.assertEqual(rows, [('ae', '2589', 'Linen Cloth', '5', '0', t - 43200), ('ac', '2770', 'Copper Ore', '20', '0', t)])
+
+    def test_scan_line_says_gear_comes_from_the_app(self):
+        self.assertIn('weapons and armour come from the app', R.SRC)
+
     def test_professions_are_recorded_by_skill_line_and_survive_an_empty_reading(self):
         self.lua.execute('function GetProfessions() return 3, nil, nil, 5, 2 end '
                          'function GetProfessionInfo(i) return "n", "i", i * 10, 300, 0, 0, ({[2]=185,[3]=171,[5]=356})[i] end')
@@ -314,6 +327,14 @@ class Addon(unittest.TestCase):
         got = self.lines(2770, '|cffffffff|Hitem:2770::::::1234:::::|h[Copper Ore]|h|r')
         self.assertFalse([l for l in got if l[0].startswith('FMI min')])
         self.assertIn(('FMI your last sale (2 h ago)', '1g 19s'), got)          # own trades still shown
+
+    def test_a_suffix_variant_gets_its_own_price_by_name(self):
+        self.app_data()
+        self.lua.execute('FMITrackerAppData["vn"] = {["Aboriginal Vest of the Eagle"] = {9000, 8000, 3}}; '
+                         'C_Item.GetItemInfo = function(x) if type(x) == "string" then return x:match("%[(.-)%]") end return "n" end')
+        got = self.lines(14121, '|cff1eff00|Hitem:14121::::::1234:::::|h[Aboriginal Vest of the Eagle]|h|r')
+        self.assertEqual(got[:2], [('FMI min (1 min ago, 3 listed)', '80s'), ('FMI real price', '90s')])
+        self.assertEqual(self.lines(14121, '|cff1eff00|Hitem:14121::::::1235:::::|h[Aboriginal Vest of the Bear]|h|r'), [])
 
     def test_the_default_bonus_id_is_not_a_variant_a_real_bonus_is(self):
         v = self.lua.eval('FMITracker.isVariant')

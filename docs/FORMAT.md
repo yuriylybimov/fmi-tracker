@@ -38,6 +38,7 @@ not certain, nothing is written.
 | `vs` | vendor sale | units | copper received | 0 | 0 |
 | `vb` | vendor purchase | units | copper paid | 0 | 0 |
 | `rp` / `tx` / `tr` | repair / flight / trainer | 1 | copper paid | 0 | 0 |
+| `ae` / `ac` (0.14.0) | auction back unsold: expired / cancelled (the mail with the item) | units | 0 | 0 | when the mail was sent (estimated from its days left; an auction house mail lasts 30 days) |
 
 * `itemId` is 0 when the game gave no id (a sale mail has the item *name* only); resolve the name yourself, and only when it belongs to exactly one item.
 * `qty` 0 means the game gave no quantity: do not guess one.

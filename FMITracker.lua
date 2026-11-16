@@ -29,7 +29,7 @@
 -- 0.13.0: FMITrackerDB.de, every Disenchant you cast with what came out and whether the Arcane Salvager buff was on (the
 -- app checks its chances against your results); "FMI disenchant" in tooltips from the app's data.
 
-local VERSION = "0.13.0"
+local VERSION = "0.14.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -310,7 +310,19 @@ end
 local function fromSubject(i, subject, money)
   if type(subject) ~= "string" then return nil end
   local won, sold = prefixOf(AUCTION_WON_MAIL_SUBJECT), prefixOf(AUCTION_SOLD_MAIL_SUBJECT)
+  local expired, removed = prefixOf(AUCTION_EXPIRED_MAIL_SUBJECT), prefixOf(AUCTION_REMOVED_MAIL_SUBJECT)
   local name
+  -- 0.14.0: an auction that came back unsold ("Auction expired: X") or that you cancelled ("Auction cancelled: X"). The
+  -- item is attached; the mail has no price. The app uses these to tell which of your lots left the auction house
+  -- without a sale (the demand audit), never as money.
+  for _, back in ipairs({ { expired, "expired" }, { removed, "cancelled" } }) do
+    if back[1] and subject:sub(1, #back[1]) == back[1] then
+      name = subject:sub(#back[1] + 1):gsub("^%s+", "")
+      local ok, _, itemId, _, n = pcall(GetInboxItem, i, 1)
+      if not (ok and itemId) then return nil end           -- the item is already taken: nothing to tell it by
+      return back[2], name, "", 0, 0, 0, 0, n or 1, itemId
+    end
+  end
   if won and subject:sub(1, #won) == won then
     name = subject:sub(#won + 1):gsub("^%s+", "")
     local ok, _, itemId, _, n = pcall(GetInboxItem, i, 1)
@@ -379,6 +391,10 @@ local function ScanMail()
           Log("as", id, itemName, count or 0, price, consignment or 0, deposit or 0)
         elseif invoiceType == "buyer" then
           Log("ab", id, itemName, count or 0, price, 0, 0)
+        elseif invoiceType == "expired" or invoiceType == "cancelled" then
+          -- c: when the mail was sent (an auction house mail lasts 30 days), so the app can find the lot that left then
+          local sent = math.max(0, math.floor(t + (daysLeft or 0) * 86400 - 30 * 86400))
+          Log(invoiceType == "expired" and "ae" or "ac", id, itemName, count or 1, 0, 0, sent)
         end
       end
     end
@@ -808,7 +824,7 @@ local function ReadReplicate()
       local items = 0
       for _ in pairs(SCAN) do items = items + 1 end
       local secs = (GetTime and GetTime() or started) - started
-      print(string.format("|cff66ccffFMI Tracker|r: |cff40ff40scan done, you can close the auction house.|r Read %d lots of %d items in %.1f s (weapons and armour left out). The app gets it at the next save.",
+      print(string.format("|cff66ccffFMI Tracker|r: |cff40ff40scan done, you can close the auction house.|r Read %d lots of %d items in %.1f s (weapons and armour come from the app). The app gets it at the next save.",
         nl, items, secs))
     end
   end
@@ -987,6 +1003,14 @@ local function TooltipLines(itemId, link)
   local A = appData()
   local variant = isVariant(link)
   local it = (not variant) and A.items and A.items[itemId]
+  -- 0.14.0: a random-suffix variant ("... of the Eagle") has its own prices in the app's data, by the name the game
+  -- gives the link; no demand, 24 h or in-game scan for it (the scan leaves weapons and armour to the app)
+  if variant and A.vn and link then
+    local info = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+    local full = info and info(link)
+    local v = full and A.vn[full]
+    if v then it = { v[1], v[2], v[3] } end
+  end
   local lv = (not variant) and DB and DB.live and DB.live[itemId]
   if lv and now() - lv[3] >= 24 * 3600 then lv = nil end
   local sc = (not variant) and freshScan(itemId)

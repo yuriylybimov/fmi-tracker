@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.0 (16 Nov 2026)
+
+- **Records auctions that came back unsold.** An "Auction expired" or "Auction cancelled" mail is logged (`ae`, `ac`) with
+  the item, the units and when the mail was sent; no money. The Market Intelligence app uses them to see which of your
+  lots left the auction house without a sale, and so how often its demand estimate takes a non-sale for a sale (weapons
+  and armour apart). The mail is only read, never opened or taken.
+- **Prices for random-suffix items in tooltips** ("... of the Eagle"): the app's data now carries them by the name the
+  player sees, and the tooltip shows FMI min and real price for them. Plain items are unchanged.
+- The scan line says where weapons and armour come from ("weapons and armour come from the app") instead of only that
+  they are left out of the in-game scan.
+
 ## 0.13.0 (16 Nov 2026)
 
 - **Records your disenchants.** Every Disenchant you cast is kept in `FMITrackerDB.de` with the item (quality, item level,

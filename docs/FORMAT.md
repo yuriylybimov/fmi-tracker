@@ -14,8 +14,15 @@ FMITrackerDB = {
   savedAt = ts,                         -- 0.4.0: when the game last wrote this file (set at logout / reload)
   opt = { save = "button" | "popup" | "off", tooltip = true },   -- 0.7.0 / 0.5.0: how saving is offered; the tooltip lines
   live = { [itemId] = { copper, quantity, ts } },   -- 0.6.0: the newest auction price the player saw (lowest per unit), 3000 items at most
+  de = { "ts|itemId|quality|itemLevel|classID|salvager|materials|character", ... },   -- 0.13.0: your disenchants, oldest first, 5000 at most
 }
 ```
+
+`de` (0.13.0): one line per Disenchant the character cast (spell 13262). `materials` is `id:qty,id:qty` (what the loot
+window held, summed per item). `salvager` is `1` when the Arcane Salvager buff (aura 1283701) was on at the start and the
+end of the cast, `0` when it was off both times, `?` when it changed during the cast: treat `?` as unknown. The item is the
+bag item clicked while the spell asked for a target, else the one armour or weapon item that left the bags; when that is
+not certain, nothing is written.
 
 * `<character>`: `Name-Realm` on Retail, `Name Surname` in WoW Forever.
 * A holdings key is the item id, or the string `"v<itemId>"` for a variant (bonus ids, enchant, gems or suffix): never treat it as the plain item.

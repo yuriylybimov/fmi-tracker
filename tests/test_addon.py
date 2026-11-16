@@ -335,6 +335,85 @@ class Addon(unittest.TestCase):
         self.lua.execute('SlashCmdList["FMITRACKER"]("tooltip off")')
         self.assertEqual(self.lines(2770), [])
 
+    # ------------------------------------------------------------ 0.13.0: your disenchants
+    def de_setup(self, salvager=False):
+        # a green leather piece (id 4243, quality 2, item level 20, armour class 4) and a blue sword (id 4000, class 2)
+        self.lua.execute('''
+          _bags = {[4243] = 1, [4000] = 1}
+          _aura = %s
+          _targeting = false
+          C_UnitAuras = { GetPlayerAuraBySpellID = function(id) if id == 1283701 and _aura then return {} end end }
+          function SpellIsTargeting() return _targeting end
+          C_Container.UseContainerItem = function(bag, slot) end
+          local info = C_Item.GetItemInfo
+          C_Item.GetItemInfo = function(id)
+            if id == 4243 then return "Fine Leather Gloves", "l", 2, 20, 15, "Armor", "Leather", 1, "", 0, 100, 4 end
+            if id == 4000 then return "Sword", "l", 3, 30, 25, "Weapon", "Sword", 1, "", 0, 300, 2 end
+            return info(id)
+          end
+          _loot = {}
+          function GetNumLootItems() return #_loot end
+          function GetLootSlotLink(i) return _loot[i] and ("|Hitem:" .. _loot[i][1] .. "::|h[x]|h") end
+          function GetLootSlotInfo(i) return 0, "x", _loot[i] and _loot[i][2] end
+        ''' % ('true' if salvager else 'false'))
+        self.g.fire('PLAYER_LOGIN')                               # the addon hooks UseContainerItem at login
+
+    def cast(self, consume=None, loot=((10940, 2),), aura_after=None, guid='G1'):
+        g = self.g
+        g.fire('UNIT_SPELLCAST_SENT', 'player', '', guid, 13262)
+        if consume:
+            self.lua.execute('_bags[%d] = nil' % consume)
+        if aura_after is not None:
+            self.lua.execute('_aura = %s' % ('true' if aura_after else 'false'))
+        g.fire('UNIT_SPELLCAST_SUCCEEDED', 'player', guid, 13262)
+        self.lua.execute('_loot = {' + ','.join('{%d, %d}' % m for m in loot) + '}')
+        g.fire('LOOT_READY')
+        g.fire('LOOT_OPENED')                                     # both fire in the game: one record
+
+    def de_rows(self):
+        n = int(self.lua.eval('FMITrackerDB.de and #FMITrackerDB.de or 0'))
+        return [self.lua.eval('FMITrackerDB.de[%d]' % (i + 1)).split('|') for i in range(n)]
+
+    def test_a_disenchant_of_the_clicked_item_is_recorded_once_with_what_came_out(self):
+        self.de_setup()
+        self.lua.execute('_targeting = true; C_Container.UseContainerItem(0, 1); _targeting = false')   # the slot of 4243 or 4000
+        clicked = int(self.lua.eval('C_Container.GetContainerItemInfo(0, 1).itemID'))
+        self.cast(loot=((10940, 2), (10938, 1)))
+        rows = self.de_rows()
+        self.assertEqual(len(rows), 1)
+        ts, item, quality, level, cls, salv, mats, who = rows[0]
+        self.assertEqual((int(item), salv, mats, who), (clicked, '0', '10938:1,10940:2', 'Orakh Gorehowl'))
+        self.assertEqual((quality, level, cls), ('2', '20', '4') if clicked == 4243 else ('3', '30', '2'))
+
+    def test_without_a_click_the_item_that_left_the_bags_is_taken(self):
+        self.de_setup(salvager=True)
+        self.cast(consume=4243)
+        self.assertEqual([(r[1], r[5], r[6]) for r in self.de_rows()], [('4243', '1', '10940:2')])
+
+    def test_two_items_gone_or_an_aura_that_changed_mid_cast_teach_nothing_wrong(self):
+        self.de_setup()
+        self.lua.execute('_bags[4243] = nil; _bags[4000] = nil')  # both gone before the cast was even sent: no candidate
+        self.cast()
+        self.assertEqual(self.de_rows(), [])
+        self.de_setup()
+        self.cast(consume=4243, aura_after=True)                  # Salvager came on during the cast
+        self.assertEqual([r[5] for r in self.de_rows()], ['?'])
+
+    def test_other_spells_and_loot_without_a_disenchant_are_ignored(self):
+        self.de_setup()
+        self.g.fire('UNIT_SPELLCAST_SENT', 'player', '', 'G9', 2366)
+        self.g.fire('UNIT_SPELLCAST_SUCCEEDED', 'player', 'G9', 2366)
+        self.lua.execute('_loot = {{2447, 1}}')
+        self.g.fire('LOOT_OPENED')
+        self.assertEqual(self.de_rows(), [])
+
+    def test_the_tooltip_says_what_disenchanting_gives_and_how_much_over_the_lowest_lot(self):
+        self.app_data()
+        self.lua.execute('FMITrackerAppData["items"][4243] = {900, 800, 4, 1}; FMITrackerAppData["de"] = {[4243] = {1250, 1}, [4244] = {300, 0}}')
+        self.assertIn(('FMI disenchant', '~12s 50c (+4s 50c vs lowest)'), self.lines(4243))
+        self.assertIn(('FMI disenchant', 'at least 3s'), self.lines(4244))
+        self.assertFalse([l for l in self.lines(2770) if l[0] == 'FMI disenchant'])
+
     def test_without_app_data_nothing_is_added(self):
         self.lua.execute('FMITrackerAppData = nil')
         self.assertEqual(self.lines(2770), [])

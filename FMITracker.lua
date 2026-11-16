@@ -1,4 +1,4 @@
--- FMI Tracker 0.11.2
+-- FMI Tracker 0.13.0
 -- Records, per character, what only the game knows and no scan can show:
 --   as  auction sale      (mail invoice "seller"): gross price, AH cut, deposit
 --   ab  auction purchase  (mail invoice "buyer"): price paid
@@ -26,8 +26,10 @@
 -- sellPrice, hotfixes included) for every plain item it sees in bags, bank, mail, tooltips and auction results; 0 means
 -- vendors do not buy it. "since" is when that price was first seen, "checked" the last time. The app uses it instead of
 -- its client tables, which are older than the hotfixes (Iron Grenade 5s -> 1s 25c on 10 Nov 2026).
+-- 0.13.0: FMITrackerDB.de, every Disenchant you cast with what came out and whether the Arcane Salvager buff was on (the
+-- app checks its chances against your results); "FMI disenchant" in tooltips from the app's data.
 
-local VERSION = "0.12.0"
+local VERSION = "0.13.0"
 local unpack = unpack or table.unpack
 FMITrackerDB = FMITrackerDB or {}
 local DB
@@ -835,6 +837,101 @@ local function LoadScan()
   if DB and type(DB.scan) == "table" and type(DB.scan.items) == "table" then SCAN, scanAt = DB.scan.items, DB.scan.at end
 end
 
+-- ---------------------------------------------------------------- your disenchants (0.13.0)
+-- Every Disenchant you cast (spell 13262) with what came out: FMITrackerDB.de, one string per disenchant,
+--   "ts|itemId|quality|itemLevel|classID|salvager|materials|character"
+-- materials "id:qty,id:qty"; salvager 1 with the Arcane Salvager buff (aura 1283701), 0 without, ? when it changed during
+-- the cast (that cast teaches neither). The disenchanted item is the one you clicked while the spell asked for a target
+-- (C_Container.UseContainerItem), else the one item of armour or weapons that left the bags. Nothing is cast for you.
+-- The app compares your results item by item with the chances it uses (Wowhead), with and without Salvager.
+local DE_SPELL, SALVAGER_AURA, MAX_DE = 13262, 1283701, 5000
+local deTarget, deCast, dePending = nil, nil, nil
+local function salvager()
+  local U = C_UnitAuras
+  if U and U.GetPlayerAuraBySpellID then
+    local ok, aura = pcall(U.GetPlayerAuraBySpellID, SALVAGER_AURA)
+    return (ok and type(aura) == "table") and 1 or 0
+  end
+  if AuraUtil and AuraUtil.FindAuraBySpellID then return AuraUtil.FindAuraBySpellID(SALVAGER_AURA, "player", "HELPFUL") and 1 or 0 end
+  return 0
+end
+local function deInfo(id)
+  local fn = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+  if not (fn and id) then return nil end
+  local ok, name, _, quality, level, _, _, _, _, _, _, _, class = pcall(fn, id)
+  if not ok or not name then return nil end
+  if not class then
+    local inst = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    class = inst and select(6, inst(id))
+  end
+  return quality, level, class
+end
+local function DeTargetClicked(bag, slot)
+  if not (SpellIsTargeting and SpellIsTargeting()) then return end
+  local C = C_Container
+  local info = C and C.GetContainerItemInfo and C.GetContainerItemInfo(bag, slot)
+  if info and info.itemID then deTarget = { id = info.itemID, at = GetTime() } end
+end
+local function DeSent(unit, castGUID, spell)
+  if unit ~= "player" or spell ~= DE_SPELL then return end
+  deCast = { guid = castGUID, bags = bagCounts(), salv = salvager(), at = GetTime(),
+             id = deTarget and GetTime() - deTarget.at < 30 and deTarget.id or nil }
+  deTarget = nil
+end
+local function DeSucceeded(unit, castGUID, spell)
+  if unit ~= "player" or spell ~= DE_SPELL then return end
+  local c = deCast
+  deCast = nil
+  if not c or (c.guid and castGUID and c.guid ~= castGUID) then return end
+  local salv = salvager()
+  dePending = { at = GetTime(), id = c.id, bags = c.bags, salv = (salv == c.salv) and salv or "?" }
+end
+local function DeStopped(unit, castGUID, spell)
+  if unit == "player" and spell == DE_SPELL then deCast = nil end
+end
+-- the item that left the bags: one itemId of armour or weapons whose count went down
+local function deGone(before)
+  local now_, found = bagCounts(), nil
+  for id, n in pairs(before or {}) do
+    if (now_[id] or 0) < n then
+      local _, _, class = deInfo(id)
+      if class == 2 or class == 4 then
+        if found then return nil end                       -- two candidates: not sure which, record nothing
+        found = id
+      end
+    end
+  end
+  return found
+end
+local function DeLoot()
+  local p = dePending
+  if not p or GetTime() - p.at > 8 or p.done then dePending = (p and not p.done and GetTime() - p.at <= 8) and p or nil return end
+  local n = GetNumLootItems and GetNumLootItems() or 0
+  if n < 1 then return end
+  local mats = {}
+  for slot = 1, n do
+    local link = GetLootSlotLink and GetLootSlotLink(slot)
+    local id = link and tonumber(link:match("item:(%d+)"))
+    local qty = GetLootSlotInfo and select(3, GetLootSlotInfo(slot))
+    if not id or not qty or qty <= 0 then return end         -- not loaded yet: LOOT_OPENED reads it again
+    mats[id] = (mats[id] or 0) + qty
+  end
+  p.done = true
+  dePending = nil
+  local id = p.id or deGone(p.bags)
+  local quality, level, class = deInfo(id)
+  if not id or not quality then return end
+  local parts = {}
+  for mid, q in pairs(mats) do parts[#parts + 1] = mid .. ":" .. q end
+  table.sort(parts)
+  DB.de = DB.de or {}
+  DB.de[#DB.de + 1] = table.concat({ now(), id, quality, level or 0, class or 0, p.salv, table.concat(parts, ","), clean(char) }, "|")
+  if #DB.de > MAX_DE then table.remove(DB.de, 1) end
+  newN = newN + 1
+  if afterLog then afterLog() end
+end
+FMITracker.deTargetClicked = DeTargetClicked
+
 -- ---------------------------------------------------------------- tooltip lines from the app (0.5.0)
 -- FMITrackerAppData comes from the addon FMITracker_Data that the Market Intelligence app writes into the AddOns folder
 -- (read by the game at login or /reload). items[id] = {market, min, units, tier, perDay}; sold/bought[id] = {unit, ts}.
@@ -936,6 +1033,16 @@ local function TooltipLines(itemId, link)
     if tier and TIER[tier] then
       out[#out + 1] = { "FMI demand", TIER[tier] .. ((perDay and perDay > 0) and (" · ~" .. math.floor(perDay + 0.5) .. "/day") or "") }
     end
+  end
+  -- 0.13.0: what disenchanting it gives on average (the app's chances, materials at the market after the AH cut), and by
+  -- how much that beats the lowest lot you or the app saw; "at least" when only part of the outcomes is known. The same
+  -- for a suffix variant: the item level and quality decide, not the suffix.
+  local de = A.de and A.de[itemId]
+  if de and de[1] and de[1] > 0 then
+    local txt = (de[2] == 1 and "~" or "at least ") .. coins(de[1])
+    local low = (lv and lv[1]) or (sc and sc[1]) or (it and it[2])
+    if low and not variant and de[1] > low then txt = txt .. " |cff4fd27a(+" .. coins(de[1] - low) .. " vs lowest)|r" end
+    out[#out + 1] = { "FMI disenchant", txt }
   end
   if s then out[#out + 1] = { "FMI your last sale (" .. agoText(s[2]) .. ")", coins(s[1]) } end
   if b then out[#out + 1] = { "FMI your last buy (" .. agoText(b[2]) .. ")", coins(b[1]) } end
@@ -1087,10 +1194,12 @@ pcall(f.RegisterEvent, f, "BANK_TABS_CHANGED")       -- not on every client
 pcall(f.RegisterEvent, f, "REPLICATE_ITEM_LIST_UPDATE")
 pcall(f.RegisterEvent, f, "AUCTION_HOUSE_SHOW")
 pcall(f.RegisterEvent, f, "AUCTION_HOUSE_CLOSED")
+for _, e in ipairs({ "UNIT_SPELLCAST_SENT", "UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED",
+                     "LOOT_READY", "LOOT_OPENED" }) do pcall(f.RegisterEvent, f, e) end            -- 0.13.0: your disenchants
 for _, e in ipairs({ "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED", "COMMODITY_SEARCH_RESULTS_UPDATED",
                      "ITEM_SEARCH_RESULTS_UPDATED" }) do pcall(f.RegisterEvent, f, e) end   -- the modern auction house only
 
-f:SetScript("OnEvent", function(_, event, arg1)
+f:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
   if event == "ADDON_LOADED" then
     if arg1 ~= "FMITracker" then return end
     FMITrackerDB = FMITrackerDB or {}
@@ -1119,6 +1228,8 @@ f:SetScript("OnEvent", function(_, event, arg1)
     if C_Trainer and C_Trainer.BuyProvidedService then hooksecurefunc(C_Trainer, "BuyProvidedService", function() Expect(trainerKind()) end) end
     safe(HookTooltips)
     safe(HookCrafts)
+    -- 0.13.0: the bag item clicked while Disenchant asks for a target is the item disenchanted
+    if C_Container and C_Container.UseContainerItem then hooksecurefunc(C_Container, "UseContainerItem", function(b, sl) safe(DeTargetClicked, b, sl) end) end
   elseif event == "MAIL_SHOW" or event == "MAIL_INBOX_UPDATE" then
     openHost = "mail"
     safe(ScanMail)
@@ -1183,6 +1294,14 @@ f:SetScript("OnEvent", function(_, event, arg1)
     safe(ReadItem, arg1)
   elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
     safe(OnReplicate)
+  elseif event == "UNIT_SPELLCAST_SENT" then
+    safe(DeSent, arg1, arg3, arg4)                     -- unit, target name, cast GUID, spell id
+  elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+    safe(DeSucceeded, arg1, arg2, arg3)                -- unit, cast GUID, spell id
+  elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" then
+    safe(DeStopped, arg1, arg2, arg3)
+  elseif event == "LOOT_READY" or event == "LOOT_OPENED" then
+    safe(DeLoot)
   end
 end)
 

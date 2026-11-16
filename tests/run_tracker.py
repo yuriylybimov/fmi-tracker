@@ -86,7 +86,7 @@ function hooksecurefunc(a, b, c)
   _hooks[name] = fn; local orig = t[name]; t[name] = function(...) local r = orig(...); fn(...); return r end
 end
 SlashCmdList = {}
-function fire(ev, a) _scripts.OnEvent(nil, ev, a) end
+function fire(ev, ...) _scripts.OnEvent(nil, ev, ...) end
 function run_timers() local t = _timers; _timers = {}; for _, fn in ipairs(t) do fn() end end
 function setmoney(m) _money = m; fire("PLAYER_MONEY"); run_timers() end
 '''

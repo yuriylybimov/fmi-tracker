@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.0 (16 Nov 2026)
+
+- **Records your disenchants.** Every Disenchant you cast is kept in `FMITrackerDB.de` with the item (quality, item level,
+  armour or weapon), what came out and whether the Arcane Salvager buff was on. The Market Intelligence app compares your
+  results item by item with the chances it uses, and with and without Salvager, which gives the first measured size of its
+  bonus. Nothing is cast or looted for you. Learned from how Disenchantry 1.2 does it (MIT); no data or table of it is used.
+- **"FMI disenchant" in item tooltips**, from the app's data: what disenchanting the item gives on average (the materials
+  at the market after the AH cut; "at least" when only part of the outcomes is known) and, when you or the app saw a lower
+  price, by how much it beats the lowest lot. Hover a lot at the auction house to see it at the moment you buy.
+
 ## 0.12.0 (15 Nov 2026)
 
 - **Remembers the vendor price the game itself knows.** For every plain item the addon sees (bags, bank, account bank,
